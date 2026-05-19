@@ -62,6 +62,13 @@ DB_COLS  = ALL_KEYS  # same order used for INSERT
 # ─────────────────────────────────────────────────────────────
 #  DATABASE
 # ─────────────────────────────────────────────────────────────
+def _make_biodata_id(row_id: int) -> str:
+    """Generate a human-readable unique ID: SS-YYYY-XXXXXX"""
+    import datetime
+    year = datetime.datetime.now().year
+    return f"SS-{year}-{row_id:06d}"
+
+
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(f'''
@@ -74,16 +81,19 @@ def init_db():
                 status      TEXT DEFAULT 'Active'
             )
         ''')
-        # Migrate existing DBs — add missing columns safely
-        existing = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        # Migrate existing DBs — add missing columns safely.
+        # We use try/except per column because SQLite has no
+        # "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" syntax.
         for col, defn in [
             ("photo",      "BLOB"),
             ("biodata_id", "TEXT"),
             ("created_at", "TEXT DEFAULT (datetime('now','localtime'))"),
             ("status",     "TEXT DEFAULT 'Active'"),
         ]:
-            if col not in existing:
+            try:
                 conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass  # column already exists — safe to ignore
 
         # Back-fill biodata_id for old rows that have none
         rows = conn.execute(
@@ -94,13 +104,6 @@ def init_db():
                 "UPDATE profiles SET biodata_id = ? WHERE id = ?",
                 (_make_biodata_id(rid), rid)
             )
-
-
-def _make_biodata_id(row_id: int) -> str:
-    """Generate a human-readable unique ID: SS-YYYY-XXXXXX"""
-    import datetime
-    year = datetime.datetime.now().year
-    return f"SS-{year}-{row_id:06d}"
 
 
 def get_next_biodata_id() -> str:
