@@ -191,7 +191,7 @@ def delete_profile(pid: int):
         conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
 
 # ─────────────────────────────────────────────────────────────
-#  PDF GENERATION (Keeps clean Bilingual Layout Style)
+#  PDF GENERATION (Shows BOTH English and Urdu labels side-by-side)
 # ─────────────────────────────────────────────────────────────
 def generate_pdf(data: dict, photo_bytes: bytes | None, biodata_id: str = "") -> io.BytesIO:
     buf = io.BytesIO()
@@ -221,13 +221,14 @@ def generate_pdf(data: dict, photo_bytes: bytes | None, biodata_id: str = "") ->
     photo_el = Paragraph("<font color='#aaaaaa'>[ No Photo ]</font>", value_s)
     if photo_bytes:
         try:
-            pil = PILImage.open(io.BytesIO(photo_bytes))
-            if pil.mode in ("RGBA", "LA", "P"):
+            img_io = io.BytesIO(photo_bytes)
+            pil = PILImage.open(img_io)
+            if pil.mode in ("RGBA", "LA", "P") or (pil.mode == 'P' and 'transparency' in pil.info):
                 pil = pil.convert("RGB")
-            pil.thumbnail((90, 110))
+            pil.thumbnail((95, 115))
             w, h  = pil.size
             buf2  = io.BytesIO()
-            pil.save(buf2, format="JPEG", quality=92)
+            pil.save(buf2, format="JPEG", quality=95)
             buf2.seek(0)
             photo_el = RLImage(buf2, width=w, height=h)
         except Exception:
@@ -250,22 +251,25 @@ def generate_pdf(data: dict, photo_bytes: bytes | None, biodata_id: str = "") ->
     story = [ht, HRFlowable(width="100%", thickness=1.5, color=colors.HexColor(BRAND), spaceAfter=6)]
 
     for sec_title, pairs in SECTIONS.items():
-        # Keep clean structural titles for PDF sheets
-        clean_title = sec_title.split(" ", 1)[-1]
-        story.append(Paragraph(clean_title, section_s))
+        # Display both English and Urdu Title in the PDF Section Header
+        story.append(Paragraph(sec_title, section_s))
         story.append(HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#d8cce8"), spaceAfter=2))
 
         rows = []
         for key, label_en, label_ur in pairs:
-            val = data.get(key, "").strip()
-            # Combines languages into layout cleanly line-by-line
-            combined_label = f"{label_en.rstrip(' *')} ({label_ur.rstrip(' *')})"
+            val = str(data.get(key, "")).strip()
+            # Combines languages cleanly side-by-side into a single cell label
+            clean_en = label_en.rstrip(" *")
+            clean_ur = label_ur.rstrip(" *")
+            combined_label = f"{clean_en} / {clean_ur}"
+            
             rows.append([
                 Paragraph(combined_label + ":", label_s),
                 Paragraph(val or "─────────────────────", value_s),
             ])
 
-        t = Table(rows, colWidths=[195, 320])
+        # Increased cell label column size to 210pt to prevent overlay/clipping text
+        t = Table(rows, colWidths=[210, 305])
         t.setStyle(TableStyle([
             ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING",    (0, 0), (-1, -1), 5),
@@ -297,7 +301,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown(f"""
+# Standardized string parsing configuration mapping
+css_style = f"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
 
@@ -309,7 +314,7 @@ st.markdown(f"""
     min-height: 100vh;
   }}
 
-  /* ── Header Banner ── */
+  /* Header Banner */
   .ss-banner {{
     background: linear-gradient(135deg, {BRAND_DARK} 0%, {BRAND} 60%, #8B5CC4 100%);
     border-radius: 20px;
@@ -332,7 +337,7 @@ st.markdown(f"""
     font-weight: 500;
   }}
 
-  /* ── Section Headers with Dual alignment style ── */
+  /* Section Headers */
   .ss-section {{
     font-family: 'Cormorant Garamond', serif;
     font-size: 20px;
@@ -414,12 +419,19 @@ st.markdown(f"""
   .tracker-meta {{ font-size: 12px; color: {MUTED}; margin-top: 3px; }}
   .tracker-date {{ font-size: 11px; color: #aaa; margin-top: 4px; }}
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(css_style, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-#  INITIALIZE RUNTIME 
+#  HEADER BANNER RENDER
 # ─────────────────────────────────────────────────────────────
-init_db()
+st.markdown(f"""
+<div class="ss-banner">
+  <div class="gem">💍</div>
+  <h1>SOULMATE SELECT</h1>
+  <p>PROPRIETOR: FARHEENA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 #  TABS VIEW SYSTEM
@@ -430,9 +442,9 @@ tab_form, tab_records, tab_tracker = st.tabs([
     "🪪  ID Tracker / آئی ڈی ٹریکر",
 ])
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  TAB 1 — BILINGUAL BIODATA ENTRY FORM
-# ══════════════════════════════════════════════
+# ==============================================
 with tab_form:
     preview_id = get_next_biodata_id()
     st.markdown(f"""
@@ -463,7 +475,6 @@ with tab_form:
             for i, (key, label_en, label_ur) in enumerate(pairs):
                 col = left if i % 2 == 0 else right
                 with col:
-                    # Renders custom HTML layout labels cleanly handling LTR & RTL side by side
                     st.markdown(f"""
                     <div class="label-container">
                         <span class="label-en">{label_en}</span>
@@ -516,9 +527,9 @@ with tab_form:
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  TAB 2 — VIEW RECORDS
-# ══════════════════════════════════════════════
+# ==============================================
 with tab_records:
     st.markdown('<div class="ss-section">🔍 Search Records | ریکارڈز تلاش کریں</div>', unsafe_allow_html=True)
 
@@ -577,9 +588,9 @@ with tab_records:
                         delete_profile(row["id"])
                         st.rerun()
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  TAB 3 — ID TRACKER
-# ══════════════════════════════════════════════
+# ==============================================
 with tab_tracker:
     st.markdown('<div class="ss-section">🪪 Biodata ID Tracker | ٹریکر اور حیثیت</div>', unsafe_allow_html=True)
 
