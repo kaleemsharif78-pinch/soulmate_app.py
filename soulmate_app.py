@@ -134,8 +134,26 @@ def save_profile(data: dict, photo_bytes: bytes | None) -> tuple[int, str]:
     return row_id, biodata_id
 
 
+def _safe(row, key: str, default: str = "") -> str:
+    """Safely read a column from a sqlite3.Row — returns default if column missing."""
+    try:
+        val = row[key]
+        return val if val is not None else default
+    except IndexError:
+        return default
+
+
+# Explicit SELECT list — never use SELECT * so column positions are always known
+_SELECT_COLS = (
+    "id, biodata_id, "
+    + ", ".join(DB_COLS)
+    + ", photo, created_at, status"
+)
+
+
 def load_profiles(search: str = ""):
-    q, p = "SELECT * FROM profiles", ()
+    q  = f"SELECT {_SELECT_COLS} FROM profiles"
+    p  = ()
     if search.strip():
         q += " WHERE name LIKE ? OR contact LIKE ? OR biodata_id LIKE ?"
         p  = (f"%{search}%", f"%{search}%", f"%{search}%")
@@ -149,7 +167,7 @@ def fetch_profile_by_biodata_id(bid: str):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         return conn.execute(
-            "SELECT * FROM profiles WHERE biodata_id = ?", (bid,)
+            f"SELECT {_SELECT_COLS} FROM profiles WHERE biodata_id = ?", (bid,)
         ).fetchone()
 
 
@@ -697,9 +715,13 @@ with tab_records:
             with st.container():
                 col_info, col_pdf, col_del = st.columns([5, 2, 1])
 
-                bid    = row["biodata_id"] or f"#{row['id']}"
-                status = row["status"] or "Active"
+                bid    = _safe(row, "biodata_id") or f"#{row['id']}"
+                status = _safe(row, "status", "Active")
                 s_cls  = f"status-{status.lower().replace(' ','-')}"
+                name   = _safe(row, "name", "—")
+                gdob   = _safe(row, "gender_dob")
+                cont   = _safe(row, "contact")
+                rel    = _safe(row, "religion_sect")
 
                 with col_info:
                     st.markdown(f"""
@@ -707,23 +729,23 @@ with tab_records:
                       <div>
                         <span class="tracker-id">{bid}</span>
                         &nbsp;<span class="{s_cls}">{status}</span>
-                        <div class="ss-record-name" style="margin-top:4px;">{row['name'] or '—'}</div>
+                        <div class="ss-record-name" style="margin-top:4px;">{name}</div>
                         <div class="ss-record-meta">
-                          {row['gender_dob'] or ''}{' &nbsp;·&nbsp; ' if row['gender_dob'] and row['contact'] else ''}{row['contact'] or ''}
-                          {' &nbsp;·&nbsp; ' + row['religion_sect'] if row['religion_sect'] else ''}
+                          {gdob}{' &nbsp;·&nbsp; ' if gdob and cont else ''}{cont}
+                          {' &nbsp;·&nbsp; ' + rel if rel else ''}
                         </div>
                       </div>
                     </div>
                     """, unsafe_allow_html=True)
 
                 with col_pdf:
-                    data_dict = {c: row[c] for c in DB_COLS if c in row.keys()}
-                    photo_b   = row["photo"] if "photo" in row.keys() else None
+                    data_dict = {c: _safe(row, c) for c in DB_COLS}
+                    photo_b   = _safe(row, "photo") or None
                     pdf_b     = generate_pdf(data_dict, photo_b, bid)
                     st.download_button(
                         "📥 PDF",
                         data=pdf_b,
-                        file_name=f"Biodata_{bid}_{(row['name'] or 'record').replace(' ','_')}.pdf",
+                        file_name=f"Biodata_{bid}_{name.replace(' ','_')}.pdf",
                         mime="application/pdf",
                         key=f"dl_{row['id']}"
                     )
@@ -753,17 +775,24 @@ with tab_tracker:
     if do_lookup and lookup_id.strip():
         found = fetch_profile_by_biodata_id(lookup_id.strip().upper())
         if found:
+            f_bid     = _safe(found, "biodata_id", lookup_id.strip())
+            f_status  = _safe(found, "status", "Active")
+            f_name    = _safe(found, "name", "—")
+            f_gdob    = _safe(found, "gender_dob")
+            f_contact = _safe(found, "contact")
+            f_edu     = _safe(found, "education")
+            f_created = _safe(found, "created_at", "N/A")
+            f_scls    = f_status.lower().replace(' ', '-')
             st.markdown(f"""
             <div class="tracker-card">
-              <span class="tracker-id">{found['biodata_id']}</span>
-              <span class="status-{(found['status'] or 'active').lower().replace(' ','-')}"
-                    style="margin-left:10px;">{found['status'] or 'Active'}</span>
-              <div class="tracker-name">{found['name'] or '—'}</div>
+              <span class="tracker-id">{f_bid}</span>
+              <span class="status-{f_scls}" style="margin-left:10px;">{f_status}</span>
+              <div class="tracker-name">{f_name}</div>
               <div class="tracker-meta">
-                {found['gender_dob'] or ''}{' · ' if found['gender_dob'] else ''}{found['contact'] or ''}
-                {' · ' + found['education'] if found['education'] else ''}
+                {f_gdob}{' · ' if f_gdob else ''}{f_contact}
+                {' · ' + f_edu if f_edu else ''}
               </div>
-              <div class="tracker-date">Registered: {found['created_at'] or 'N/A'}</div>
+              <div class="tracker-date">Registered: {f_created}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -808,9 +837,8 @@ with tab_tracker:
     if not all_records:
         st.info("No records registered yet.")
     else:
-        # Summary stats
         from collections import Counter
-        status_counts = Counter(r["status"] or "Active" for r in all_records)
+        status_counts = Counter(_safe(r, "status", "Active") for r in all_records)
         c1, c2, c3, c4 = st.columns(4)
         for col, label, icon in [
             (c1, "Active",  "🟢"),
@@ -824,20 +852,24 @@ with tab_tracker:
         st.markdown("")
 
         for row in all_records:
-            bid    = row["biodata_id"] or f"#{row['id']}"
-            status = row["status"] or "Active"
-            fg, bg = STATUS_COLORS.get(status, ("#555", "#eee"))
-            created = row["created_at"] or "N/A"
+            bid     = _safe(row, "biodata_id") or f"#{row['id']}"
+            status  = _safe(row, "status", "Active")
+            fg, bg  = STATUS_COLORS.get(status, ("#555", "#eee"))
+            created = _safe(row, "created_at", "N/A")
+            name    = _safe(row, "name", "—")
+            contact = _safe(row, "contact", "No contact")
+            gdob    = _safe(row, "gender_dob", "N/A")
+            edu     = _safe(row, "education")
 
             st.markdown(f"""
             <div class="tracker-card">
               <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                 <div>
                   <span class="tracker-id">{bid}</span>
-                  <div class="tracker-name">{row['name'] or '—'}</div>
+                  <div class="tracker-name">{name}</div>
                   <div class="tracker-meta">
-                    {row['contact'] or 'No contact'}&nbsp;·&nbsp;{row['gender_dob'] or 'N/A'}
-                    {' &nbsp;·&nbsp; ' + row['education'] if row['education'] else ''}
+                    {contact}&nbsp;·&nbsp;{gdob}
+                    {' &nbsp;·&nbsp; ' + edu if edu else ''}
                   </div>
                   <div class="tracker-date">📅 Registered: {created}</div>
                 </div>
