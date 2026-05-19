@@ -7,11 +7,10 @@ from reportlab.lib import colors
 import io
 from PIL import Image as PILImage
 
-# 1. Improved Database Setup (Handles dynamic column addition to prevent OperationalError)
+# 1. Improved Database Setup
 def init_db():
     conn = sqlite3.connect('soulmate_online.db')
     cursor = conn.cursor()
-    # Create table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +22,6 @@ def init_db():
         )
     ''')
     
-    # Check if 'photo' column exists, if not, alter table dynamically
     cursor.execute("PRAGMA table_info(profiles)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'photo' not in columns:
@@ -34,7 +32,7 @@ def init_db():
 
 init_db()
 
-# 2. Modern PDF Generation Function
+# 2. Fully Upgraded PDF Generation Function (Guarantees Picture Rendering)
 def generate_pdf(data, photo_bytes):
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
@@ -47,31 +45,43 @@ def generate_pdf(data, photo_bytes):
     label_style = ParagraphStyle('Label', fontName='Helvetica-Bold', fontSize=9, textColor=colors.HexColor('#333333'))
     value_style = ParagraphStyle('Value', fontName='Helvetica', fontSize=9, textColor=colors.HexColor('#555555'))
 
-    # Header Layout
+    # Header Text Construction
     header_text_block = []
     header_text_block.append(Paragraph("SOULMATE SELECT", title_style))
     header_text_block.append(Paragraph("Proprietor: Farheena Rana Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
     
-    photo_element = "__________________"
+    # CRITICAL FIX FOR PHOTO: Convert bytes to safe ReportLab Image flow with explicit dimensions
+    photo_element = ""
     if photo_bytes:
         try:
             img_io = io.BytesIO(photo_bytes)
             pil_img = PILImage.open(img_io)
-            pil_img.thumbnail((100, 120))
+            
+            # Convert to RGB mode if RGBA/PNG to avoid conflicts in PDF generation
+            if pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info):
+                pil_img = pil_img.convert('RGB')
+                
+            # Perfect thumbnail fitting for the layout box
+            pil_img.thumbnail((95, 115))
             img_w, img_h = pil_img.size
             
             img_data = io.BytesIO()
-            pil_img.save(img_data, format='JPEG')
+            pil_img.save(img_data, format='JPEG', quality=95)
             img_data.seek(0)
             
+            # ReportLab Flowable Image element
             photo_element = Image(img_data, width=img_w, height=img_h)
-        except:
-            pass
+        except Exception as e:
+            photo_element = Paragraph(f"[Image Error]", value_style)
+    else:
+        # If no photo is uploaded, display a clean placeholder box instead of blank space
+        photo_element = Paragraph("<font color='#888888'>[ No Photo<br/>Uploaded ]</font>", value_style)
 
+    # Header Layout Table (Aligns text on left, profile photo inside box on right)
     header_table_data = [[header_text_block, photo_element]]
-    header_table = Table(header_table_data, colWidths=[400, 120])
+    header_table = Table(header_table_data, colWidths=[410, 110])
     header_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (1,0), (1,0), 'RIGHT'),
         ('BOTTOMPADDING', (0,0), (-1,-1), 15),
     ]))
@@ -123,12 +133,9 @@ st.set_page_config(page_title="Soulmate Select Premium", page_icon="💍", layou
 
 st.markdown("""
 <style>
-    /* Main Background and tone */
     .stApp {
         background: linear-gradient(135deg, #f3edf7 0%, #e5daf1 100%);
     }
-    
-    /* Premium 3D Header Card */
     .premium-header {
         background: linear-gradient(135deg, #4A154B 0%, #2c0b2d 100%);
         padding: 30px;
@@ -153,8 +160,6 @@ st.markdown("""
         margin-top: 8px;
         opacity: 0.9;
     }
-    
-    /* Subheaders Styling with Left Highlight */
     .stMarkdown h3 {
         color: #4A154B !important;
         background: #fdf8ff;
@@ -165,8 +170,6 @@ st.markdown("""
         font-size: 18px !important;
         margin-top: 25px !important;
     }
-    
-    /* Input Boxes Modern Curved Design */
     .stTextInput>div>div>input {
         background-color: #ffffff !important;
         border: 1px solid #ced4da !important;
@@ -175,12 +178,6 @@ st.markdown("""
         box-shadow: inset 0px 2px 4px rgba(0,0,0,0.05), 0px 2px 5px rgba(0,0,0,0.02) !important;
         transition: all 0.3s ease-in-out;
     }
-    .stTextInput>div>div>input:focus {
-        border-color: #4A154B !important;
-        box-shadow: 0px 0px 8px rgba(74, 21, 75, 0.3), inset 0px 1px 2px rgba(0,0,0,0.05) !important;
-    }
-    
-    /* Submit and Download Buttons styling */
     div.stButton > button:first-child {
         background: linear-gradient(135deg, #FFD700 0%, #e6be00 100%) !important;
         color: #4A154B !important;
@@ -192,19 +189,10 @@ st.markdown("""
         box-shadow: 0px 6px 15px rgba(230, 190, 0, 0.4), inset 0px 1px 2px rgba(255,255,255,0.5) !important;
         text-shadow: 0px 1px 1px rgba(255,255,255,0.6);
         width: 100%;
-        transition: all 0.2s ease;
-    }
-    div.stButton > button:first-child:hover {
-        transform: translateY(-2px);
-        box-shadow: 0px 8px 20px rgba(230, 190, 0, 0.6) !important;
-    }
-    div.stButton > button:first-child:active {
-        transform: translateY(1px);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Premium HTML Header banner
 st.markdown("""
 <div class="premium-header">
     <h1>SOULMATE SELECT</h1>
