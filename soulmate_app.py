@@ -7,10 +7,11 @@ from reportlab.lib import colors
 import io
 from PIL import Image as PILImage
 
-# 1. Database Setup
+# 1. Improved Database Setup (Handles dynamic column addition to prevent OperationalError)
 def init_db():
     conn = sqlite3.connect('soulmate_online.db')
     cursor = conn.cursor()
+    # Create table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,10 +19,16 @@ def init_db():
             tongue_blood TEXT, disability TEXT, religion_sect TEXT, caste_clan TEXT,
             education TEXT, occupation_income TEXT, father_details TEXT, mother_details TEXT,
             siblings TEXT, hometown TEXT, address TEXT, contact TEXT,
-            partner_age_height TEXT, partner_edu_city TEXT, partner_other TEXT,
-            photo BLOB
+            partner_age_height TEXT, partner_edu_city TEXT, partner_other TEXT
         )
     ''')
+    
+    # Check if 'photo' column exists, if not, alter table dynamically
+    cursor.execute("PRAGMA table_info(profiles)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'photo' not in columns:
+        cursor.execute("ALTER TABLE profiles ADD COLUMN photo BLOB")
+        
     conn.commit()
     conn.close()
 
@@ -40,7 +47,7 @@ def generate_pdf(data, photo_bytes):
     label_style = ParagraphStyle('Label', fontName='Helvetica-Bold', fontSize=9, textColor=colors.HexColor('#333333'))
     value_style = ParagraphStyle('Value', fontName='Helvetica', fontSize=9, textColor=colors.HexColor('#555555'))
 
-    # Header section
+    # Header Layout
     header_text_block = []
     header_text_block.append(Paragraph("SOULMATE SELECT", title_style))
     header_text_block.append(Paragraph("Proprietor: Farheena Rana Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
@@ -159,7 +166,7 @@ st.markdown("""
         margin-top: 25px !important;
     }
     
-    /* Input Boxes Modern 3D/Curved Design */
+    /* Input Boxes Modern Curved Design */
     .stTextInput>div>div>input {
         background-color: #ffffff !important;
         border: 1px solid #ced4da !important;
@@ -197,7 +204,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# App UI Layout with Premium HTML Header banner
+# Premium HTML Header banner
 st.markdown("""
 <div class="premium-header">
     <h1>SOULMATE SELECT</h1>
