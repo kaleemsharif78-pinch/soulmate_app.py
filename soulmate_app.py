@@ -1,279 +1,558 @@
 import streamlit as st
 import sqlite3
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table,
+    TableStyle, Image as RLImage, HRFlowable
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from reportlab.lib.units import mm
 import io
 from PIL import Image as PILImage
 
-# 1. Improved Database Setup
+# ─────────────────────────────────────────────────────────────
+#  CONFIG
+# ─────────────────────────────────────────────────────────────
+DB_PATH    = "soulmate_online.db"
+BRAND      = "#6B3FA0"          # deep lavender
+BRAND_DARK = "#4A2370"
+GOLD       = "#C9A84C"
+LAVENDER   = "#EDE7F6"
+SOFT       = "#F7F3FD"
+MUTED      = "#7B6FA0"
+
+SECTIONS = {
+    "📋 Personal Details": [
+        ("name",               "Full Name *"),
+        ("gender_dob",         "Gender / Date of Birth"),
+        ("age_height_weight",  "Age / Height / Weight"),
+        ("complexion_marital", "Complexion / Marital Status"),
+        ("tongue_blood",       "Mother Tongue / Blood Group"),
+        ("disability",         "Physical Disability (if any)"),
+    ],
+    "🕌 Religious Background": [
+        ("religion_sect", "Religion / Sect / Maslak"),
+        ("caste_clan",    "Caste / Zaat / Clan"),
+    ],
+    "🎓 Education & Profession": [
+        ("education",         "Highest Qualification / Field"),
+        ("occupation_income", "Current Occupation / Income"),
+    ],
+    "👨‍👩‍👧 Family Details": [
+        ("father_details", "Father's Name & Occupation"),
+        ("mother_details", "Mother's Name & Occupation"),
+        ("siblings",       "Total Brothers / Sisters"),
+        ("hometown",       "Native Place (Hometown)"),
+    ],
+    "📍 Contact & Location": [
+        ("address", "Current City & Address"),
+        ("contact", "Contact Numbers *"),
+    ],
+    "💍 Partner Expectations": [
+        ("partner_age_height", "Required Age & Height"),
+        ("partner_edu_city",   "Required Qualification & City"),
+        ("partner_other",      "Other Requirements"),
+    ],
+}
+
+ALL_KEYS = [k for pairs in SECTIONS.values() for k, _ in pairs]
+DB_COLS  = ALL_KEYS  # same order used for INSERT
+
+# ─────────────────────────────────────────────────────────────
+#  DATABASE
+# ─────────────────────────────────────────────────────────────
 def init_db():
-    conn = sqlite3.connect('soulmate_online.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT, gender_dob TEXT, age_height_weight TEXT, complexion_marital TEXT,
-            tongue_blood TEXT, disability TEXT, religion_sect TEXT, caste_clan TEXT,
-            education TEXT, occupation_income TEXT, father_details TEXT, mother_details TEXT,
-            siblings TEXT, hometown TEXT, address TEXT, contact TEXT,
-            partner_age_height TEXT, partner_edu_city TEXT, partner_other TEXT
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(f'''
+            CREATE TABLE IF NOT EXISTS profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {", ".join(c + " TEXT" for c in DB_COLS)},
+                photo BLOB
+            )
+        ''')
+        # Migrate: add photo column if missing (existing DBs)
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        if "photo" not in existing:
+            conn.execute("ALTER TABLE profiles ADD COLUMN photo BLOB")
+
+
+def save_profile(data: dict, photo_bytes: bytes | None) -> int:
+    cols   = DB_COLS + ["photo"]
+    values = [data.get(c, "") for c in DB_COLS] + [photo_bytes]
+    ph     = ", ".join("?" * len(cols))
+    col_str = ", ".join(cols)
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            f"INSERT INTO profiles ({col_str}) VALUES ({ph})", values
         )
-    ''')
-    
-    cursor.execute("PRAGMA table_info(profiles)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if 'photo' not in columns:
-        cursor.execute("ALTER TABLE profiles ADD COLUMN photo BLOB")
-        
-    conn.commit()
-    conn.close()
+        return cur.lastrowid
 
-init_db()
 
-# 2. Fully Upgraded PDF Generation Function (Guarantees Picture Rendering)
-def generate_pdf(data, photo_bytes):
-    pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
-    story = []
+def load_profiles(search: str = ""):
+    q, p = "SELECT * FROM profiles", ()
+    if search.strip():
+        q += " WHERE name LIKE ? OR contact LIKE ?"
+        p  = (f"%{search}%", f"%{search}%")
+    q += " ORDER BY id DESC"
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(q, p).fetchall()
 
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=24, leading=28, textColor=colors.HexColor('#4A154B'), alignment=0, spaceAfter=2)
-    subtitle_style = ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=10, textColor=colors.HexColor('#606060'), alignment=0, spaceAfter=4)
-    section_style = ParagraphStyle('Section', fontName='Helvetica-Bold', fontSize=12, leading=15, textColor=colors.HexColor('#4A154B'), spaceBefore=12, spaceAfter=6)
-    label_style = ParagraphStyle('Label', fontName='Helvetica-Bold', fontSize=9, textColor=colors.HexColor('#333333'))
-    value_style = ParagraphStyle('Value', fontName='Helvetica', fontSize=9, textColor=colors.HexColor('#555555'))
 
-    # Header Text Construction
-    header_text_block = []
-    header_text_block.append(Paragraph("SOULMATE SELECT", title_style))
-    header_text_block.append(Paragraph("Proprietor: Farheena Rana Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
-    
-    # CRITICAL FIX FOR PHOTO: Convert bytes to safe ReportLab Image flow with explicit dimensions
-    photo_element = ""
+def delete_profile(pid: int):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
+
+# ─────────────────────────────────────────────────────────────
+#  PDF GENERATION
+# ─────────────────────────────────────────────────────────────
+def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        rightMargin=28, leftMargin=28, topMargin=28, bottomMargin=28
+    )
+
+    base = getSampleStyleSheet()
+    mk   = lambda n, **kw: ParagraphStyle(n, parent=base["Normal"], **kw)
+
+    title_s   = mk("T",  fontName="Helvetica-Bold", fontSize=22, leading=26,
+                   textColor=colors.HexColor(BRAND_DARK), alignment=0, spaceAfter=2)
+    sub_s     = mk("S",  fontName="Helvetica", fontSize=9,
+                   textColor=colors.HexColor(MUTED), alignment=0, spaceAfter=3)
+    section_s = mk("H",  fontName="Helvetica-Bold", fontSize=11, leading=14,
+                   textColor=colors.HexColor(BRAND_DARK), spaceBefore=12, spaceAfter=5)
+    label_s   = mk("L",  fontName="Helvetica-Bold", fontSize=9,
+                   textColor=colors.HexColor("#2d2d2d"))
+    value_s   = mk("V",  fontName="Helvetica", fontSize=9,
+                   textColor=colors.HexColor("#444444"))
+    footer_s  = mk("F",  fontName="Helvetica-Oblique", fontSize=8,
+                   textColor=colors.HexColor(MUTED), alignment=1)
+
+    # ── Photo element ──
+    photo_el = Paragraph(
+        "<font color='#aaaaaa'>[ No Photo ]</font>", value_s
+    )
     if photo_bytes:
         try:
-            img_io = io.BytesIO(photo_bytes)
-            pil_img = PILImage.open(img_io)
-            
-            # Convert to RGB mode if RGBA/PNG to avoid conflicts in PDF generation
-            if pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info):
-                pil_img = pil_img.convert('RGB')
-                
-            # Perfect thumbnail fitting for the layout box
-            pil_img.thumbnail((95, 115))
-            img_w, img_h = pil_img.size
-            
-            img_data = io.BytesIO()
-            pil_img.save(img_data, format='JPEG', quality=95)
-            img_data.seek(0)
-            
-            # ReportLab Flowable Image element
-            photo_element = Image(img_data, width=img_w, height=img_h)
-        except Exception as e:
-            photo_element = Paragraph(f"[Image Error]", value_style)
-    else:
-        # If no photo is uploaded, display a clean placeholder box instead of blank space
-        photo_element = Paragraph("<font color='#888888'>[ No Photo<br/>Uploaded ]</font>", value_style)
+            pil = PILImage.open(io.BytesIO(photo_bytes))
+            if pil.mode in ("RGBA", "LA", "P"):
+                pil = pil.convert("RGB")
+            pil.thumbnail((90, 110))
+            w, h  = pil.size
+            buf2  = io.BytesIO()
+            pil.save(buf2, format="JPEG", quality=92)
+            buf2.seek(0)
+            photo_el = RLImage(buf2, width=w, height=h)
+        except Exception:
+            pass
 
-    # Header Layout Table (Aligns text on left, profile photo inside box on right)
-    header_table_data = [[header_text_block, photo_element]]
-    header_table = Table(header_table_data, colWidths=[410, 110])
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (1,0), (1,0), 'RIGHT'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 15),
+    # ── Header table ──
+    header_left = [
+        Paragraph("SOULMATE SELECT", title_s),
+        Paragraph("Proprietor: Farheena Rana Amjad", sub_s),
+        Paragraph("Matrimonial Biodata Form  |  All information is strictly confidential", sub_s),
+    ]
+    ht = Table([[header_left, photo_el]], colWidths=[400, 110])
+    ht.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",         (1, 0), (1,  0),  "RIGHT"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]))
-    story.append(header_table)
 
-    def add_pdf_section(title, pairs):
-        story.append(Paragraph(title, section_style))
-        table_data = []
-        for label, val in pairs:
-            table_data.append([Paragraph(label, label_style), Paragraph(val if val else "_____________________________________", value_style)])
-        t = Table(table_data, colWidths=[180, 340])
+    story = [ht, HRFlowable(width="100%", thickness=1.5,
+                             color=colors.HexColor(BRAND), spaceAfter=6)]
+
+    # ── Sections ──
+    for sec_title, pairs in SECTIONS.items():
+        # Strip emoji from title for cleaner PDF
+        clean_title = sec_title.split(" ", 1)[-1]
+        story.append(Paragraph(clean_title, section_s))
+        story.append(HRFlowable(width="100%", thickness=0.4,
+                                 color=colors.HexColor("#d8cce8"), spaceAfter=2))
+
+        rows = []
+        for key, label in pairs:
+            val = data.get(key, "").strip()
+            rows.append([
+                Paragraph(label.rstrip(" *") + ":", label_s),
+                Paragraph(val or "─────────────────────", value_s),
+            ])
+
+        t = Table(rows, colWidths=[175, 340])
         t.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#E0E0E0')),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LINEBELOW",     (0, 0), (-1, -1), 0.3, colors.HexColor("#e8e0f0")),
+            ("ROWBACKGROUNDS",(0, 0), (-1, -1),
+             [colors.HexColor("#faf8fd"), colors.white]),
         ]))
         story.append(t)
+        story.append(Spacer(1, 4))
 
-    add_pdf_section("1. Personal Details", [
-        ("Full Name:", data['name']), ("Gender / Date of Birth:", data['gender_dob']),
-        ("Age / Height / Weight:", data['age_height_weight']), ("Complexion / Marital Status:", data['complexion_marital']),
-        ("Mother Tongue / Blood Group:", data['tongue_blood']), ("Physical Disability:", data['disability'])
-    ])
-    add_pdf_section("2. Religious Background", [
-        ("Religion / Sect / Maslak:", data['religion_sect']), ("Caste / Zaat / Clan:", data['caste_clan'])
-    ])
-    add_pdf_section("3. Education & Profession", [
-        ("Highest Qualification:", data['education']), ("Current Occupation / Income:", data['occupation_income'])
-    ])
-    add_pdf_section("4. Family Details", [
-        ("Father's Name & Details:", data['father_details']), ("Mother's Name & Details:", data['mother_details']),
-        ("Total Siblings (Brothers/Sisters):", data['siblings']), ("Native Place (Hometown):", data['hometown'])
-    ])
-    add_pdf_section("5. Contact & Location", [
-        ("Current Address:", data['address']), ("Phone / Contact Numbers:", data['contact'])
-    ])
-    add_pdf_section("6. Partner Expectations", [
-        ("Required Age & Height:", data['partner_age_height']), ("Required Qualification & City:", data['partner_edu_city']),
-        ("Other Requirements:", data['partner_other'])
-    ])
+    story.append(Spacer(1, 18))
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                             color=colors.HexColor("#c5b8e0"), spaceAfter=6))
+    story.append(Paragraph(
+        "Thank you for registering with Soulmate Select. "
+        "This document is private and confidential.",
+        footer_s
+    ))
 
     doc.build(story)
-    pdf_buffer.seek(0)
-    return pdf_buffer
+    buf.seek(0)
+    return buf
 
-# 3. Streamlit Advanced Custom CSS Styling (Premium Modern Design)
-st.set_page_config(page_title="Soulmate Select Premium", page_icon="💍", layout="centered")
+# ─────────────────────────────────────────────────────────────
+#  PAGE CONFIG  &  CUSTOM CSS
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Soulmate Select",
+    page_icon="💍",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-st.markdown("""
+st.markdown(f"""
 <style>
-    .stApp {
-        background: linear-gradient(135deg, #f3edf7 0%, #e5daf1 100%);
-    }
-    .premium-header {
-        background: linear-gradient(135deg, #4A154B 0%, #2c0b2d 100%);
-        padding: 30px;
-        border-radius: 20px;
-        text-align: center;
-        box-shadow: 0px 10px 25px rgba(74, 21, 75, 0.3), inset 0px 1px 3px rgba(255,255,255,0.3);
-        margin-bottom: 25px;
-        border: 2px solid #dfc3e6;
-    }
-    .premium-header h1 {
-        color: #FFD700 !important;
-        font-family: 'Arial Black', Gadget, sans-serif;
-        font-size: 38px !important;
-        letter-spacing: 2px;
-        margin: 0;
-        text-shadow: 2px 3px 6px rgba(0,0,0,0.5);
-    }
-    .premium-header p {
-        color: #ffffff !important;
-        font-size: 16px;
-        font-weight: bold;
-        margin-top: 8px;
-        opacity: 0.9;
-    }
-    .stMarkdown h3 {
-        color: #4A154B !important;
-        background: #fdf8ff;
-        padding: 8px 15px;
-        border-left: 5px solid #FFD700;
-        border-radius: 4px;
-        box-shadow: 0px 3px 6px rgba(0,0,0,0.05);
-        font-size: 18px !important;
-        margin-top: 25px !important;
-    }
-    .stTextInput>div>div>input {
-        background-color: #ffffff !important;
-        border: 1px solid #ced4da !important;
-        border-radius: 10px !important;
-        padding: 10px 15px !important;
-        box-shadow: inset 0px 2px 4px rgba(0,0,0,0.05), 0px 2px 5px rgba(0,0,0,0.02) !important;
-        transition: all 0.3s ease-in-out;
-    }
-    div.stButton > button:first-child {
-        background: linear-gradient(135deg, #FFD700 0%, #e6be00 100%) !important;
-        color: #4A154B !important;
-        font-weight: bold !important;
-        font-size: 18px !important;
-        padding: 12px 30px !important;
-        border-radius: 12px !important;
-        border: none !important;
-        box-shadow: 0px 6px 15px rgba(230, 190, 0, 0.4), inset 0px 1px 2px rgba(255,255,255,0.5) !important;
-        text-shadow: 0px 1px 1px rgba(255,255,255,0.6);
-        width: 100%;
-    }
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@400;500;600&display=swap');
+
+  /* ── Global ── */
+  html, body, [class*="css"] {{
+    font-family: 'DM Sans', sans-serif;
+  }}
+  .stApp {{
+    background: linear-gradient(160deg, #f0eafa 0%, #e8dff5 40%, #ddd3f0 100%);
+    min-height: 100vh;
+  }}
+
+  /* ── Header Banner ── */
+  .ss-banner {{
+    background: linear-gradient(135deg, {BRAND_DARK} 0%, {BRAND} 60%, #8B5CC4 100%);
+    border-radius: 20px;
+    padding: 36px 40px 30px;
+    text-align: center;
+    margin-bottom: 32px;
+    box-shadow: 0 12px 40px rgba(74,35,112,0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+    position: relative;
+    overflow: hidden;
+  }}
+  .ss-banner::before {{
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 200px; height: 200px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.05);
+  }}
+  .ss-banner::after {{
+    content: '';
+    position: absolute;
+    bottom: -40px; left: -40px;
+    width: 140px; height: 140px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.04);
+  }}
+  .ss-banner h1 {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 48px;
+    font-weight: 700;
+    color: {GOLD} !important;
+    letter-spacing: 4px;
+    margin: 0 0 6px;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  }}
+  .ss-banner p {{
+    color: rgba(255,255,255,0.85) !important;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    margin: 0;
+  }}
+  .ss-banner .gem {{ font-size: 22px; }}
+
+  /* ── Section Headers ── */
+  .ss-section {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 20px;
+    font-weight: 600;
+    color: {BRAND_DARK};
+    background: linear-gradient(90deg, rgba(107,63,160,0.08) 0%, transparent 100%);
+    border-left: 4px solid {GOLD};
+    padding: 10px 16px;
+    border-radius: 0 10px 10px 0;
+    margin: 28px 0 12px;
+    letter-spacing: 0.5px;
+  }}
+
+  /* ── Inputs ── */
+  .stTextInput > div > div > input,
+  .stTextArea > div > div > textarea {{
+    background: rgba(255,255,255,0.9) !important;
+    border: 1.5px solid #d4c4ee !important;
+    border-radius: 12px !important;
+    padding: 10px 16px !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 14px !important;
+    color: #2d1f45 !important;
+    box-shadow: 0 2px 8px rgba(107,63,160,0.06), inset 0 1px 3px rgba(0,0,0,0.03) !important;
+    transition: border-color 0.2s, box-shadow 0.2s !important;
+  }}
+  .stTextInput > div > div > input:focus,
+  .stTextArea > div > div > textarea:focus {{
+    border-color: {BRAND} !important;
+    box-shadow: 0 0 0 3px rgba(107,63,160,0.15) !important;
+  }}
+
+  /* ── Labels ── */
+  .stTextInput label, .stTextArea label, .stFileUploader label {{
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    color: {BRAND_DARK} !important;
+    letter-spacing: 0.3px;
+  }}
+
+  /* ── Primary Button ── */
+  div.stButton > button:first-child {{
+    background: linear-gradient(135deg, {BRAND} 0%, {BRAND_DARK} 100%) !important;
+    color: white !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 16px !important;
+    padding: 14px 32px !important;
+    border-radius: 14px !important;
+    border: none !important;
+    width: 100% !important;
+    letter-spacing: 0.5px !important;
+    box-shadow: 0 6px 20px rgba(74,35,112,0.35) !important;
+    transition: transform 0.15s, box-shadow 0.15s !important;
+  }}
+  div.stButton > button:first-child:hover {{
+    box-shadow: 0 10px 28px rgba(74,35,112,0.45) !important;
+    transform: translateY(-1px) !important;
+  }}
+
+  /* ── Download Button ── */
+  div.stDownloadButton > button {{
+    background: linear-gradient(135deg, {GOLD} 0%, #a8822a 100%) !important;
+    color: #2d1f45 !important;
+    font-weight: 700 !important;
+    font-size: 15px !important;
+    padding: 13px 28px !important;
+    border-radius: 14px !important;
+    border: none !important;
+    width: 100% !important;
+    box-shadow: 0 6px 18px rgba(180,140,40,0.35) !important;
+  }}
+
+  /* ── File uploader ── */
+  .stFileUploader > div {{
+    background: rgba(255,255,255,0.75) !important;
+    border: 2px dashed #b89ed4 !important;
+    border-radius: 14px !important;
+    padding: 18px !important;
+    transition: border-color 0.2s !important;
+  }}
+  .stFileUploader > div:hover {{
+    border-color: {BRAND} !important;
+  }}
+
+  /* ── Alerts ── */
+  .stSuccess {{
+    background: rgba(107,63,160,0.08) !important;
+    border: 1px solid #b89ed4 !important;
+    border-radius: 12px !important;
+  }}
+  .stError {{
+    border-radius: 12px !important;
+  }}
+
+  /* ── Divider ── */
+  hr {{
+    border-color: rgba(107,63,160,0.15) !important;
+    margin: 24px 0 !important;
+  }}
+
+  /* ── Records table ── */
+  .ss-record-row {{
+    background: rgba(255,255,255,0.8);
+    border: 1px solid #e0d5f0;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }}
+  .ss-record-name {{
+    font-weight: 600;
+    color: {BRAND_DARK};
+    font-size: 15px;
+  }}
+  .ss-record-meta {{
+    font-size: 12px;
+    color: {MUTED};
+    margin-top: 2px;
+  }}
+
+  /* ── Tab styling ── */
+  .stTabs [data-baseweb="tab-list"] {{
+    background: rgba(255,255,255,0.5);
+    border-radius: 14px;
+    padding: 4px;
+    gap: 4px;
+  }}
+  .stTabs [data-baseweb="tab"] {{
+    border-radius: 10px !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 600 !important;
+    color: {MUTED} !important;
+    padding: 8px 20px !important;
+  }}
+  .stTabs [aria-selected="true"] {{
+    background: {BRAND} !important;
+    color: white !important;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────
+#  INIT
+# ─────────────────────────────────────────────────────────────
+init_db()
+
+# ─────────────────────────────────────────────────────────────
+#  HEADER
+# ─────────────────────────────────────────────────────────────
 st.markdown("""
-<div class="premium-header">
-    <h1>SOULMATE SELECT</h1>
-    <p>Proprietor: Farheena Rana Amjad | Premium Matrimonial Database System</p>
+<div class="ss-banner">
+  <div class="gem">💍</div>
+  <h1>SOULMATE SELECT</h1>
+  <p>PROPRIETOR: FARHEENA RANA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("<h3>📸 Candidate Profile Photo</h3>", unsafe_allow_html=True)
-uploaded_photo = st.file_uploader("Upload Profile Photo (JPG/PNG)", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+# ─────────────────────────────────────────────────────────────
+#  TABS
+# ─────────────────────────────────────────────────────────────
+tab_form, tab_records = st.tabs(["✚  New Biodata", "🔍  View Records"])
 
-if uploaded_photo:
-    st.image(uploaded_photo, caption="Uploaded Photo Preview", width=130)
+# ══════════════════════════════════════════════
+#  TAB 1 — NEW BIODATA FORM
+# ══════════════════════════════════════════════
+with tab_form:
 
-st.markdown("<h3>1. Personal Details</h3>", unsafe_allow_html=True)
-name = st.text_input("Full Name")
-gender_dob = st.text_input("Gender / Date of Birth")
-age_height_weight = st.text_input("Age / Height / Weight")
-complexion_marital = st.text_input("Complexion / Marital Status")
-tongue_blood = st.text_input("Mother Tongue / Blood Group")
-disability = st.text_input("Physical Disability")
+    # Photo upload
+    st.markdown('<div class="ss-section">📸 Profile Photo</div>', unsafe_allow_html=True)
+    uploaded_photo = st.file_uploader(
+        "Upload photo (JPG / PNG)", type=["jpg", "jpeg", "png"],
+        label_visibility="collapsed"
+    )
+    if uploaded_photo:
+        col_img, col_tip = st.columns([1, 3])
+        with col_img:
+            st.image(uploaded_photo, width=120)
+        with col_tip:
+            st.info("✅ Photo uploaded successfully. It will appear on the PDF.")
 
-st.markdown("<h3>2. Religious Background</h3>", unsafe_allow_html=True)
-religion_sect = st.text_input("Religion / Sect / Maslak")
-caste_clan = st.text_input("Caste / Zaat / Clan")
+    # Form fields
+    field_values: dict[str, str] = {}
 
-st.markdown("<h3>3. Education & Profession</h3>", unsafe_allow_html=True)
-education = st.text_input("Highest Qualification")
-occupation_income = st.text_input("Current Occupation / Income")
+    for section_title, pairs in SECTIONS.items():
+        st.markdown(f'<div class="ss-section">{section_title}</div>', unsafe_allow_html=True)
 
-st.markdown("<h3>4. Family Details</h3>", unsafe_allow_html=True)
-father_details = st.text_input("Father's Name & Details")
-mother_details = st.text_input("Mother's Name & Details")
-siblings = st.text_input("Total Siblings (Brothers/Sisters)")
-hometown = st.text_input("Native Place (Hometown)")
+        # Two-column layout for sections with ≥ 4 fields
+        if len(pairs) >= 4:
+            left, right = st.columns(2)
+            for i, (key, label) in enumerate(pairs):
+                col = left if i % 2 == 0 else right
+                with col:
+                    field_values[key] = st.text_input(label, key=key)
+        else:
+            for key, label in pairs:
+                field_values[key] = st.text_input(label, key=key)
 
-st.markdown("<h3>5. Contact & Location</h3>", unsafe_allow_html=True)
-address = st.text_input("Current Address")
-contact = st.text_input("Phone / Contact Numbers")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-st.markdown("<h3>6. Partner Expectations</h3>", unsafe_allow_html=True)
-partner_age_height = st.text_input("Required Age & Height")
-partner_edu_city = st.text_input("Required Qualification & City")
-partner_other = st.text_input("Other Partner Requirements")
+    if st.button("💾  Save Record & Generate PDF"):
+        errors = []
+        if not field_values.get("name", "").strip():
+            errors.append("Full Name is required.")
+        if not field_values.get("contact", "").strip():
+            errors.append("Contact Number is required.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+        if errors:
+            for err in errors:
+                st.error(f"⚠️ {err}")
+        else:
+            photo_bytes = uploaded_photo.read() if uploaded_photo else None
 
-if st.button("Save & Process Data"):
-    if not name:
-        st.error("Bhai, Full Name likhna zaroori hai!")
+            try:
+                pid = save_profile(field_values, photo_bytes)
+                pdf_buf = generate_pdf(field_values, photo_bytes)
+
+                st.success(f"✨ Record saved successfully! (ID: {pid})")
+                st.download_button(
+                    label="📥  Download Biodata PDF",
+                    data=pdf_buf,
+                    file_name=f"Biodata_{field_values['name'].strip().replace(' ', '_')}.pdf",
+                    mime="application/pdf",
+                )
+            except Exception as e:
+                st.error(f"Something went wrong: {e}")
+
+# ══════════════════════════════════════════════
+#  TAB 2 — VIEW RECORDS
+# ══════════════════════════════════════════════
+with tab_records:
+    st.markdown('<div class="ss-section">🔍 Search Records</div>', unsafe_allow_html=True)
+
+    search_q = st.text_input("Search by name or contact", placeholder="Type to filter…",
+                              label_visibility="collapsed")
+    records  = load_profiles(search_q)
+
+    if not records:
+        st.info("No records found.")
     else:
-        photo_data = None
-        if uploaded_photo is not None:
-            photo_data = uploaded_photo.read()
+        st.markdown(f"**{len(records)} record(s) found**")
+        st.markdown("")
 
-        form_data = {
-            'name': name, 'gender_dob': gender_dob, 'age_height_weight': age_height_weight,
-            'complexion_marital': complexion_marital, 'tongue_blood': tongue_blood, 'disability': disability,
-            'religion_sect': religion_sect, 'caste_clan': caste_clan, 'education': education,
-            'occupation_income': occupation_income, 'father_details': father_details, 'mother_details': mother_details,
-            'siblings': siblings, 'hometown': hometown, 'address': address, 'contact': contact,
-            'partner_age_height': partner_age_height, 'partner_edu_city': partner_edu_city, 'partner_other': partner_other
-        }
-        
-        conn = sqlite3.connect('soulmate_online.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO profiles (
-                name, gender_dob, age_height_weight, complexion_marital, tongue_blood, disability,
-                religion_sect, caste_clan, education, occupation_income, father_details, mother_details,
-                siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other, photo
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', list(form_data.values()) + [photo_data])
-        conn.commit()
-        conn.close()
-        
-        st.success("✨ Record Premium Online Database mein save ho gaya hai!")
-        pdf_file = generate_pdf(form_data, photo_data)
-        
-        st.download_button(
-            label="📥 Download Professional Biodata PDF",
-            data=pdf_file,
-            file_name=f"Biodata_{name.replace(' ', '_')}.pdf",
-            mime="application/pdf"
-        )
+        for row in records:
+            with st.container():
+                col_info, col_pdf, col_del = st.columns([5, 2, 1])
+
+                with col_info:
+                    st.markdown(f"""
+                    <div class="ss-record-row">
+                      <div>
+                        <div class="ss-record-name">#{row['id']} — {row['name'] or '—'}</div>
+                        <div class="ss-record-meta">
+                          {row['gender_dob'] or ''}
+                          {'&nbsp;·&nbsp;' if row['gender_dob'] and row['contact'] else ''}
+                          {row['contact'] or ''}
+                          {'&nbsp;·&nbsp;' if row['religion_sect'] else ''}
+                          {row['religion_sect'] or ''}
+                        </div>
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col_pdf:
+                    data_dict = {c: row[c] for c in DB_COLS if c in row.keys()}
+                    photo_b   = row["photo"] if "photo" in row.keys() else None
+                    pdf_b     = generate_pdf(data_dict, photo_b)
+                    st.download_button(
+                        "📥 PDF",
+                        data=pdf_b,
+                        file_name=f"Biodata_{(row['name'] or 'record').replace(' ','_')}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_{row['id']}"
+                    )
+
+                with col_del:
+                    if st.button("🗑", key=f"del_{row['id']}", help="Delete this record"):
+                        delete_profile(row["id"])
+                        st.rerun()
