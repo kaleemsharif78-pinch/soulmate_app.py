@@ -66,38 +66,93 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(f'''
             CREATE TABLE IF NOT EXISTS profiles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                biodata_id  TEXT UNIQUE,
                 {", ".join(c + " TEXT" for c in DB_COLS)},
-                photo BLOB
+                photo       BLOB,
+                created_at  TEXT DEFAULT (datetime('now','localtime')),
+                status      TEXT DEFAULT 'Active'
             )
         ''')
-        # Migrate: add photo column if missing (existing DBs)
+        # Migrate existing DBs — add missing columns safely
         existing = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
-        if "photo" not in existing:
-            conn.execute("ALTER TABLE profiles ADD COLUMN photo BLOB")
+        for col, defn in [
+            ("photo",      "BLOB"),
+            ("biodata_id", "TEXT"),
+            ("created_at", "TEXT DEFAULT (datetime('now','localtime'))"),
+            ("status",     "TEXT DEFAULT 'Active'"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} {defn}")
+
+        # Back-fill biodata_id for old rows that have none
+        rows = conn.execute(
+            "SELECT id FROM profiles WHERE biodata_id IS NULL OR biodata_id = ''"
+        ).fetchall()
+        for (rid,) in rows:
+            conn.execute(
+                "UPDATE profiles SET biodata_id = ? WHERE id = ?",
+                (_make_biodata_id(rid), rid)
+            )
 
 
-def save_profile(data: dict, photo_bytes: bytes | None) -> int:
-    cols   = DB_COLS + ["photo"]
-    values = [data.get(c, "") for c in DB_COLS] + [photo_bytes]
-    ph     = ", ".join("?" * len(cols))
+def _make_biodata_id(row_id: int) -> str:
+    """Generate a human-readable unique ID: SS-YYYY-XXXXXX"""
+    import datetime
+    year = datetime.datetime.now().year
+    return f"SS-{year}-{row_id:06d}"
+
+
+def get_next_biodata_id() -> str:
+    """Preview what the next ID will be (before INSERT)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='profiles'"
+        ).fetchone()
+        next_rowid = (row[0] + 1) if row else 1
+    return _make_biodata_id(next_rowid)
+
+
+def save_profile(data: dict, photo_bytes: bytes | None) -> tuple[int, str]:
+    cols    = DB_COLS + ["photo"]
+    values  = [data.get(c, "") for c in DB_COLS] + [photo_bytes]
+    ph      = ", ".join("?" * len(cols))
     col_str = ", ".join(cols)
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             f"INSERT INTO profiles ({col_str}) VALUES ({ph})", values
         )
-        return cur.lastrowid
+        row_id     = cur.lastrowid
+        biodata_id = _make_biodata_id(row_id)
+        conn.execute(
+            "UPDATE profiles SET biodata_id = ? WHERE id = ?",
+            (biodata_id, row_id)
+        )
+    return row_id, biodata_id
 
 
 def load_profiles(search: str = ""):
     q, p = "SELECT * FROM profiles", ()
     if search.strip():
-        q += " WHERE name LIKE ? OR contact LIKE ?"
-        p  = (f"%{search}%", f"%{search}%")
+        q += " WHERE name LIKE ? OR contact LIKE ? OR biodata_id LIKE ?"
+        p  = (f"%{search}%", f"%{search}%", f"%{search}%")
     q += " ORDER BY id DESC"
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         return conn.execute(q, p).fetchall()
+
+
+def fetch_profile_by_biodata_id(bid: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            "SELECT * FROM profiles WHERE biodata_id = ?", (bid,)
+        ).fetchone()
+
+
+def update_status(pid: int, status: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE profiles SET status = ? WHERE id = ?", (status, pid))
 
 
 def delete_profile(pid: int):
@@ -107,7 +162,7 @@ def delete_profile(pid: int):
 # ─────────────────────────────────────────────────────────────
 #  PDF GENERATION
 # ─────────────────────────────────────────────────────────────
-def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
+def generate_pdf(data: dict, photo_bytes: bytes | None, biodata_id: str = "") -> io.BytesIO:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=letter,
@@ -121,6 +176,8 @@ def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
                    textColor=colors.HexColor(BRAND_DARK), alignment=0, spaceAfter=2)
     sub_s     = mk("S",  fontName="Helvetica", fontSize=9,
                    textColor=colors.HexColor(MUTED), alignment=0, spaceAfter=3)
+    id_s      = mk("ID", fontName="Helvetica-Bold", fontSize=10,
+                   textColor=colors.HexColor(BRAND), alignment=0, spaceAfter=2)
     section_s = mk("H",  fontName="Helvetica-Bold", fontSize=11, leading=14,
                    textColor=colors.HexColor(BRAND_DARK), spaceBefore=12, spaceAfter=5)
     label_s   = mk("L",  fontName="Helvetica-Bold", fontSize=9,
@@ -151,9 +208,11 @@ def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
     # ── Header table ──
     header_left = [
         Paragraph("SOULMATE SELECT", title_s),
-        Paragraph("Proprietor: FarheenaAmjad", sub_s),
+        Paragraph("Proprietor: Farheena Rana Amjad", sub_s),
         Paragraph("Matrimonial Biodata Form  |  All information is strictly confidential", sub_s),
     ]
+    if biodata_id:
+        header_left.append(Paragraph(f"Biodata ID: {biodata_id}", id_s))
     ht = Table([[header_left, photo_el]], colWidths=[400, 110])
     ht.setStyle(TableStyle([
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
@@ -195,11 +254,10 @@ def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
     story.append(Spacer(1, 18))
     story.append(HRFlowable(width="100%", thickness=0.5,
                              color=colors.HexColor("#c5b8e0"), spaceAfter=6))
-    story.append(Paragraph(
-        "Thank you for registering with Soulmate Select. "
-        "This document is private and confidential.",
-        footer_s
-    ))
+    footer_text = "Thank you for registering with Soulmate Select.  |  This document is private and confidential."
+    if biodata_id:
+        footer_text += f"  |  Biodata ID: {biodata_id}"
+    story.append(Paragraph(footer_text, footer_s))
 
     doc.build(story)
     buf.seek(0)
@@ -431,19 +489,116 @@ st.markdown("""
 <div class="ss-banner">
   <div class="gem">💍</div>
   <h1>SOULMATE SELECT</h1>
-  <p>PROPRIETOR: FARHEENA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
+  <p>PROPRIETOR: FARHEENA RANA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
 </div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  EXTRA CSS for ID Tracker
+# ─────────────────────────────────────────────────────────────
+st.markdown(f"""
+<style>
+  .id-badge {{
+    display: inline-block;
+    background: linear-gradient(135deg, {BRAND} 0%, {BRAND_DARK} 100%);
+    color: white;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    padding: 10px 22px;
+    border-radius: 12px;
+    letter-spacing: 2px;
+    box-shadow: 0 4px 14px rgba(74,35,112,0.3);
+    margin: 6px 0 16px;
+  }}
+  .id-preview-box {{
+    background: rgba(255,255,255,0.7);
+    border: 2px dashed {BRAND};
+    border-radius: 14px;
+    padding: 14px 20px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }}
+  .id-preview-label {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {MUTED};
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }}
+  .id-preview-value {{
+    font-size: 20px;
+    font-weight: 700;
+    color: {BRAND_DARK};
+    letter-spacing: 2px;
+  }}
+  .status-active   {{ background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }}
+  .status-matched  {{ background:#e3f2fd; color:#1565c0; border:1px solid #90caf9; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }}
+  .status-closed   {{ background:#fce4ec; color:#c62828; border:1px solid #ef9a9a; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }}
+  .status-on-hold  {{ background:#fff8e1; color:#e65100; border:1px solid #ffcc80; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }}
+  .tracker-card {{
+    background: rgba(255,255,255,0.85);
+    border: 1px solid #ddd3f0;
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 10px rgba(107,63,160,0.07);
+  }}
+  .tracker-id {{
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: {BRAND};
+    background: {LAVENDER};
+    padding: 3px 10px;
+    border-radius: 8px;
+    display: inline-block;
+    margin-bottom: 6px;
+  }}
+  .tracker-name {{
+    font-size: 16px;
+    font-weight: 700;
+    color: {BRAND_DARK};
+  }}
+  .tracker-meta {{
+    font-size: 12px;
+    color: {MUTED};
+    margin-top: 3px;
+  }}
+  .tracker-date {{
+    font-size: 11px;
+    color: #aaa;
+    margin-top: 4px;
+  }}
+</style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 #  TABS
 # ─────────────────────────────────────────────────────────────
-tab_form, tab_records = st.tabs(["✚  New Biodata", "🔍  View Records"])
+tab_form, tab_records, tab_tracker = st.tabs([
+    "✚  New Biodata",
+    "🔍  View Records",
+    "🪪  ID Tracker",
+])
 
 # ══════════════════════════════════════════════
 #  TAB 1 — NEW BIODATA FORM
 # ══════════════════════════════════════════════
 with tab_form:
+
+    # Preview upcoming Biodata ID
+    preview_id = get_next_biodata_id()
+    st.markdown(f"""
+    <div class="id-preview-box">
+      <div>
+        <div class="id-preview-label">🪪 Biodata ID that will be assigned</div>
+        <div class="id-preview-value">{preview_id}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Photo upload
     st.markdown('<div class="ss-section">📸 Profile Photo</div>', unsafe_allow_html=True)
@@ -464,7 +619,6 @@ with tab_form:
     for section_title, pairs in SECTIONS.items():
         st.markdown(f'<div class="ss-section">{section_title}</div>', unsafe_allow_html=True)
 
-        # Two-column layout for sections with ≥ 4 fields
         if len(pairs) >= 4:
             left, right = st.columns(2)
             for i, (key, label) in enumerate(pairs):
@@ -489,16 +643,29 @@ with tab_form:
                 st.error(f"⚠️ {err}")
         else:
             photo_bytes = uploaded_photo.read() if uploaded_photo else None
-
             try:
-                pid = save_profile(field_values, photo_bytes)
-                pdf_buf = generate_pdf(field_values, photo_bytes)
+                pid, biodata_id = save_profile(field_values, photo_bytes)
+                pdf_buf = generate_pdf(field_values, photo_bytes, biodata_id)
 
-                st.success(f"✨ Record saved successfully! (ID: {pid})")
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,#f3e5ff,#ede0fa);
+                     border:1px solid #c8a8e8; border-radius:14px; padding:18px 22px; margin:10px 0;">
+                  <div style="font-size:13px;color:{MUTED};font-weight:600;margin-bottom:4px;">
+                    ✅ Record saved successfully!
+                  </div>
+                  <div style="font-size:22px;font-weight:800;color:{BRAND_DARK};letter-spacing:2px;">
+                    {biodata_id}
+                  </div>
+                  <div style="font-size:12px;color:{MUTED};margin-top:4px;">
+                    Keep this Biodata ID for future reference and tracking.
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
                 st.download_button(
                     label="📥  Download Biodata PDF",
                     data=pdf_buf,
-                    file_name=f"Biodata_{field_values['name'].strip().replace(' ', '_')}.pdf",
+                    file_name=f"Biodata_{biodata_id}_{field_values['name'].strip().replace(' ', '_')}.pdf",
                     mime="application/pdf",
                 )
             except Exception as e:
@@ -510,9 +677,12 @@ with tab_form:
 with tab_records:
     st.markdown('<div class="ss-section">🔍 Search Records</div>', unsafe_allow_html=True)
 
-    search_q = st.text_input("Search by name or contact", placeholder="Type to filter…",
-                              label_visibility="collapsed")
-    records  = load_profiles(search_q)
+    search_q = st.text_input(
+        "Search by name, contact, or Biodata ID",
+        placeholder="e.g. Ahmed  /  0300-1234567  /  SS-2025-000001",
+        label_visibility="collapsed"
+    )
+    records = load_profiles(search_q)
 
     if not records:
         st.info("No records found.")
@@ -524,17 +694,20 @@ with tab_records:
             with st.container():
                 col_info, col_pdf, col_del = st.columns([5, 2, 1])
 
+                bid    = row["biodata_id"] or f"#{row['id']}"
+                status = row["status"] or "Active"
+                s_cls  = f"status-{status.lower().replace(' ','-')}"
+
                 with col_info:
                     st.markdown(f"""
                     <div class="ss-record-row">
                       <div>
-                        <div class="ss-record-name">#{row['id']} — {row['name'] or '—'}</div>
+                        <span class="tracker-id">{bid}</span>
+                        &nbsp;<span class="{s_cls}">{status}</span>
+                        <div class="ss-record-name" style="margin-top:4px;">{row['name'] or '—'}</div>
                         <div class="ss-record-meta">
-                          {row['gender_dob'] or ''}
-                          {'&nbsp;·&nbsp;' if row['gender_dob'] and row['contact'] else ''}
-                          {row['contact'] or ''}
-                          {'&nbsp;·&nbsp;' if row['religion_sect'] else ''}
-                          {row['religion_sect'] or ''}
+                          {row['gender_dob'] or ''}{' &nbsp;·&nbsp; ' if row['gender_dob'] and row['contact'] else ''}{row['contact'] or ''}
+                          {' &nbsp;·&nbsp; ' + row['religion_sect'] if row['religion_sect'] else ''}
                         </div>
                       </div>
                     </div>
@@ -543,11 +716,11 @@ with tab_records:
                 with col_pdf:
                     data_dict = {c: row[c] for c in DB_COLS if c in row.keys()}
                     photo_b   = row["photo"] if "photo" in row.keys() else None
-                    pdf_b     = generate_pdf(data_dict, photo_b)
+                    pdf_b     = generate_pdf(data_dict, photo_b, bid)
                     st.download_button(
                         "📥 PDF",
                         data=pdf_b,
-                        file_name=f"Biodata_{(row['name'] or 'record').replace(' ','_')}.pdf",
+                        file_name=f"Biodata_{bid}_{(row['name'] or 'record').replace(' ','_')}.pdf",
                         mime="application/pdf",
                         key=f"dl_{row['id']}"
                     )
@@ -556,3 +729,121 @@ with tab_records:
                     if st.button("🗑", key=f"del_{row['id']}", help="Delete this record"):
                         delete_profile(row["id"])
                         st.rerun()
+
+# ══════════════════════════════════════════════
+#  TAB 3 — ID TRACKER
+# ══════════════════════════════════════════════
+with tab_tracker:
+    st.markdown('<div class="ss-section">🪪 Biodata ID Tracker</div>', unsafe_allow_html=True)
+
+    # ── Quick ID lookup ──
+    st.markdown("**🔎 Look up a Biodata ID**")
+    lookup_col, btn_col = st.columns([4, 1])
+    with lookup_col:
+        lookup_id = st.text_input(
+            "Enter Biodata ID", placeholder="SS-2025-000001",
+            label_visibility="collapsed", key="lookup_id_input"
+        )
+    with btn_col:
+        do_lookup = st.button("Search", key="lookup_btn")
+
+    if do_lookup and lookup_id.strip():
+        found = fetch_profile_by_biodata_id(lookup_id.strip().upper())
+        if found:
+            st.markdown(f"""
+            <div class="tracker-card">
+              <span class="tracker-id">{found['biodata_id']}</span>
+              <span class="status-{(found['status'] or 'active').lower().replace(' ','-')}"
+                    style="margin-left:10px;">{found['status'] or 'Active'}</span>
+              <div class="tracker-name">{found['name'] or '—'}</div>
+              <div class="tracker-meta">
+                {found['gender_dob'] or ''}{' · ' if found['gender_dob'] else ''}{found['contact'] or ''}
+                {' · ' + found['education'] if found['education'] else ''}
+              </div>
+              <div class="tracker-date">Registered: {found['created_at'] or 'N/A'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.warning(f"No record found for ID: **{lookup_id.strip()}**")
+
+    st.markdown("---")
+
+    # ── Status updater ──
+    st.markdown("**✏️ Update Status for a Biodata ID**")
+    upd_col1, upd_col2, upd_col3 = st.columns([3, 2, 1])
+    with upd_col1:
+        upd_id = st.text_input("Biodata ID", placeholder="SS-2025-000001",
+                                label_visibility="collapsed", key="upd_id")
+    with upd_col2:
+        new_status = st.selectbox(
+            "Status", ["Active", "Matched", "On Hold", "Closed"],
+            label_visibility="collapsed", key="upd_status"
+        )
+    with upd_col3:
+        if st.button("Update", key="upd_btn"):
+            target = fetch_profile_by_biodata_id(upd_id.strip().upper())
+            if target:
+                update_status(target["id"], new_status)
+                st.success(f"✅ {upd_id.strip()} → **{new_status}**")
+                st.rerun()
+            else:
+                st.error("ID not found.")
+
+    st.markdown("---")
+
+    # ── Full ID Registry ──
+    st.markdown("**📋 Full Biodata ID Registry**")
+
+    STATUS_COLORS = {
+        "Active":  ("#2e7d32", "#e8f5e9"),
+        "Matched": ("#1565c0", "#e3f2fd"),
+        "Closed":  ("#c62828", "#fce4ec"),
+        "On Hold": ("#e65100", "#fff8e1"),
+    }
+
+    all_records = load_profiles()
+    if not all_records:
+        st.info("No records registered yet.")
+    else:
+        # Summary stats
+        from collections import Counter
+        status_counts = Counter(r["status"] or "Active" for r in all_records)
+        c1, c2, c3, c4 = st.columns(4)
+        for col, label, icon in [
+            (c1, "Active",  "🟢"),
+            (c2, "Matched", "🔵"),
+            (c3, "On Hold", "🟡"),
+            (c4, "Closed",  "🔴"),
+        ]:
+            count = status_counts.get(label, 0)
+            col.metric(f"{icon} {label}", count)
+
+        st.markdown("")
+
+        for row in all_records:
+            bid    = row["biodata_id"] or f"#{row['id']}"
+            status = row["status"] or "Active"
+            fg, bg = STATUS_COLORS.get(status, ("#555", "#eee"))
+            created = row["created_at"] or "N/A"
+
+            st.markdown(f"""
+            <div class="tracker-card">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <span class="tracker-id">{bid}</span>
+                  <div class="tracker-name">{row['name'] or '—'}</div>
+                  <div class="tracker-meta">
+                    {row['contact'] or 'No contact'}&nbsp;·&nbsp;{row['gender_dob'] or 'N/A'}
+                    {' &nbsp;·&nbsp; ' + row['education'] if row['education'] else ''}
+                  </div>
+                  <div class="tracker-date">📅 Registered: {created}</div>
+                </div>
+                <div style="text-align:right;">
+                  <span style="background:{bg};color:{fg};border:1px solid {fg}33;
+                    padding:5px 14px; border-radius:20px; font-size:12px; font-weight:700;">
+                    {status}
+                  </span>
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
