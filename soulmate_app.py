@@ -5,9 +5,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-import os
 
-# Database Setup
+# 1. Database Setup
 def init_db():
     conn = sqlite3.connect('soulmate_records.db')
     cursor = conn.cursor()
@@ -24,16 +23,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Save Record and Generate PDF
+# 2. Save Data & Generate Modern PDF
 def save_and_export():
-    # Collect Data from Fields
     data = {k: entry_vars[k].get() for k in entry_vars}
-    
     if not data['name']:
-        messagebox.showerror("Error", "Full Name zaroori hai!")
+        messagebox.showerror("Error", "Bhai, Full Name likhna zaroori hai!")
         return
 
-    # Save to SQLite Database
     conn = sqlite3.connect('soulmate_records.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -41,102 +37,80 @@ def save_and_export():
             name, gender_dob, age_height_weight, complexion_marital, tongue_blood, disability,
             religion_sect, caste_clan, education, occupation_income, father_details, mother_details,
             siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other
-        ) VALUES (:, :, :, :, :, :, :, :, :, :, :, :, :, :, :, :, :, :, :)
-    '''.replace(':', '?'), list(data.values()))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', list(data.values()))
     conn.commit()
     conn.close()
 
-    # Generate Professional PDF
+    # Professional 1-Page PDF Layout
     pdf_filename = f"Biodata_{data['name'].replace(' ', '_')}.pdf"
     doc = SimpleDocTemplate(pdf_filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=24, leading=28, textColor=colors.HexColor('#7030a0'), alignment=1, spaceAfter=4)
-    subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#555555'), alignment=1, spaceAfter=15)
-    section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=12, leading=16, textColor=colors.HexColor('#7030a0'), spaceBefore=10, spaceAfter=5)
-    label_style = ParagraphStyle('Label', parent=styles['Normal'], fontSize=10, fontName='Helvetica-Bold', textColor=colors.HexColor('#333333'))
-    value_style = ParagraphStyle('Value', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#555555'))
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=22, leading=26, textColor=colors.HexColor('#7030a0'), alignment=1, spaceAfter=2)
+    subtitle_style = ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=10, textColor=colors.HexColor('#495057'), alignment=1, spaceAfter=12)
+    section_style = ParagraphStyle('Section', fontName='Helvetica-Bold', fontSize=11, leading=14, textColor=colors.HexColor('#7030a0'), spaceBefore=8, spaceAfter=4)
+    label_style = ParagraphStyle('Label', fontName='Helvetica-Bold', fontSize=9, textColor=colors.HexColor('#343a40'))
+    value_style = ParagraphStyle('Value', fontName='Helvetica', fontSize=9, textColor=colors.HexColor('#495057'))
 
-    # Header
     story.append(Paragraph("SOULMATE SELECT", title_style))
-    story.append(Paragraph("Proprietor: Farheena Amjad | Matrimonial Biodata Form", subtitle_style))
-    story.append(Spacer(1, 10))
+    story.append(Paragraph("Proprietor: Farheena Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
 
-    def add_section(title, pairs):
+    def add_pdf_section(title, pairs):
         story.append(Paragraph(title, section_style))
         table_data = []
         for label, val in pairs:
-            table_data.append([Paragraph(label, label_style), Paragraph(val if val else "_______________________", value_style)])
-        
-        t = Table(table_data, colWidths=[200, 320])
+            table_data.append([Paragraph(label, label_style), Paragraph(val if val else "_____________________________________", value_style)])
+        t = Table(table_data, colWidths=[180, 340])
         t.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-            ('TOPPADDING', (0,0), (-1,-1), 6),
-            ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#e1d8eb')),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#ced4da')),
         ]))
         story.append(t)
-        story.append(Spacer(1, 10))
 
-    # Adding Data sections to PDF
-    add_section("1. Personal Details", [
-        ("Full Name:", data['name']),
-        ("Gender / Date of Birth:", data['gender_dob']),
-        ("Age / Height / Weight:", data['age_height_weight']),
-        ("Complexion / Marital Status:", data['complexion_marital']),
-        ("Mother Tongue / Blood Group:", data['tongue_blood']),
-        ("Physical Disability:", data['disability'])
+    add_pdf_section("1. Personal Details", [
+        ("Full Name:", data['name']), ("Gender / Date of Birth:", data['gender_dob']),
+        ("Age / Height / Weight:", data['age_height_weight']), ("Complexion / Marital Status:", data['complexion_marital']),
+        ("Mother Tongue / Blood Group:", data['tongue_blood']), ("Physical Disability:", data['disability'])
     ])
-
-    add_section("2. Religious & Family Background", [
-        ("Religion / Sect (Maslak):", data['religion_sect']),
-        ("Caste / Clan (Zaat):", data['caste_clan'])
+    add_pdf_section("2. Religious & Family Background", [
+        ("Religion / Sect (Maslak):", data['religion_sect']), ("Caste / Clan (Zaat):", data['caste_clan'])
     ])
-
-    add_section("3. Education & Career", [
-        ("Highest Qualification / Field:", data['education']),
-        ("Current Occupation / Income:", data['occupation_income'])
+    add_pdf_section("3. Education & Career", [
+        ("Highest Qualification / Field:", data['education']), ("Current Occupation / Income:", data['occupation_income'])
     ])
-
-    add_section("4. Family Details", [
-        ("Father's Name & Occupation:", data['father_details']),
-        ("Mother's Name & Occupation:", data['mother_details']),
-        ("Total Brothers / Sisters:", data['siblings']),
-        ("Native Place (Hometown):", data['hometown'])
+    add_pdf_section("4. Family Details", [
+        ("Father's Name & Occupation:", data['father_details']), ("Mother's Name & Occupation:", data['mother_details']),
+        ("Total Brothers / Sisters:", data['siblings']), ("Native Place (Hometown):", data['hometown'])
     ])
-
-    add_section("5. Contact & Location", [
-        ("Current City & Address:", data['address']),
-        ("Contact Numbers:", data['contact'])
+    add_pdf_section("5. Contact & Location", [
+        ("Current City & Address:", data['address']), ("Contact Numbers:", data['contact'])
     ])
-
-    add_section("6. Partner Expectations", [
-        ("Required Age & Height:", data['partner_age_height']),
-        ("Required Qualification & City:", data['partner_edu_city']),
+    add_pdf_section("6. Partner Expectations", [
+        ("Required Age & Height:", data['partner_age_height']), ("Required Qualification & City:", data['partner_edu_city']),
         ("Other Requirements:", data['partner_other'])
     ])
 
     doc.build(story)
-    
-    messagebox.showinfo("Success", f"Record save ho gaya aur professional PDF banchuki hai:\n{pdf_filename}")
+    messagebox.showinfo("Success", f"Record Save ho gaya aur PDF ban gayi hai:\n{pdf_filename}")
     clear_fields()
 
 def clear_fields():
     for var in entry_vars.values():
         var.set("")
 
-# GUI Setup
+# 3. GUI Window Setup
 root = tk.Tk()
-root.title("Soulmate Select - Database & PDF Generator")
-root.geometry("650x750")
+root.title("Soulmate Select - Premium Database")
+root.geometry("620x700")
 root.configure(bg="#f8f6fa")
 
-# Title Banner
-banner = tk.Label(root, text="SOULMATE SELECT DATABASE SYSTEM", font=("Arial", 16, "bold"), fg="#ffffff", bg="#7030a0", pady=10)
-banner.pack(fill="x",  pady=(0, 10))
+banner = tk.Label(root, text="SOULMATE SELECT DATABASE SYSTEM", font=("Arial", 14, "bold"), fg="#ffffff", bg="#7030a0", pady=8)
+banner.pack(fill="x")
 
-# Main Scrollable Frame Context
 canvas = tk.Canvas(root, bg="#f8f6fa", highlightthickness=0)
 scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
 scroll_frame = tk.Frame(canvas, bg="#f8f6fa")
@@ -144,11 +118,9 @@ scroll_frame = tk.Frame(canvas, bg="#f8f6fa")
 scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
 canvas.configure(yscrollcommand=scrollbar.set)
-
-canvas.pack(side="left", fill="both", expand=True, padx=10)
+canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 scrollbar.pack(side="right", fill="y")
 
-# Form Fields Variables
 fields = [
     ('name', 'Full Name'), ('gender_dob', 'Gender / Date of Birth'), 
     ('age_height_weight', 'Age / Height / Weight'), ('complexion_marital', 'Complexion / Marital Status'),
@@ -161,27 +133,20 @@ fields = [
     ('partner_age_height', 'Required Age & Height'), ('partner_edu_city', 'Required Qualification & City'),
     ('partner_other', 'Other Partner Requirements')
 ]
-
 entry_vars = {k: tk.StringVar() for k, _ in fields}
 
-# Generate Form GUI
 for k, label_text in fields:
-    row_frame = tk.Frame(scroll_frame, bg="#f8f6fa", pady=4)
-    row_frame.pack(fill="x", padx=15)
-    
-    lbl = tk.Label(row_frame, text=label_text, font=("Arial", 10, "bold"), anchor="w", width=25, bg="#f8f6fa", fg="#333333")
+    row = tk.Frame(scroll_frame, bg="#f8f6fa", pady=4)
+    row.pack(fill="x", padx=10)
+    lbl = tk.Label(row, text=label_text, font=("Arial", 10, "bold"), anchor="w", width=25, bg="#f8f6fa", fg="#333333")
     lbl.pack(side="left")
-    
-    ent = tk.Entry(row_frame, textvariable=entry_vars[k], font=("Arial", 10), bd=1, relief="solid")
-    ent.pack(side="right", fill="x", expand=True, ipady=3)
+    ent = tk.Entry(row, textvariable=entry_vars[k], font=("Arial", 10), bd=1, relief="solid")
+    ent.pack(side="right", fill="x", expand=True, ipady=2)
 
-# Buttons Footer
-btn_frame = tk.Frame(root, bg="#f8f6fa", pady=15)
+btn_frame = tk.Frame(root, bg="#f8f6fa", pady=10)
 btn_frame.pack(fill="x")
+submit_btn = tk.Button(btn_frame, text="Save Record & Export PDF", font=("Arial", 11, "bold"), fg="#ffffff", bg="#7030a0", command=save_and_export, padding=5, relief="flat")
+submit_btn.pack()
 
-submit_btn = tk.Button(btn_frame, text="Save Record & Export PDF", font=("Arial", 11, "bold"), fg="#ffffff", bg="#7030a0", activebackground="#5b2485", activeforeground="#ffffff", command=save_and_export, padding=6, relief="flat")
-submit_btn.pack(pady=5)
-
-# Initialize App
 init_db()
 root.mainloop()
