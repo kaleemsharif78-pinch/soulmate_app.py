@@ -151,7 +151,7 @@ def generate_pdf(data: dict, photo_bytes: bytes | None) -> io.BytesIO:
     # ── Header table ──
     header_left = [
         Paragraph("SOULMATE SELECT", title_s),
-        Paragraph("Proprietor: Farheena Rana Amjad", sub_s),
+        Paragraph("Proprietor: FarheenaAmjad", sub_s),
         Paragraph("Matrimonial Biodata Form  |  All information is strictly confidential", sub_s),
     ]
     ht = Table([[header_left, photo_el]], colWidths=[400, 110])
@@ -431,7 +431,7 @@ st.markdown("""
 <div class="ss-banner">
   <div class="gem">💍</div>
   <h1>SOULMATE SELECT</h1>
-  <p>PROPRIETOR: FARHEENA RANA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
+  <p>PROPRIETOR: FARHEENA AMJAD &nbsp;·&nbsp; PREMIUM MATRIMONIAL DATABASE SYSTEM</p>
 </div>
 """, unsafe_allow_html=True)
 
