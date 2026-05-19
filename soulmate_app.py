@@ -1,12 +1,13 @@
 import streamlit as st
 import sqlite3
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 import io
+from PIL import Image as PILImage
 
-# 1. Database Setup
+# 1. Database Setup (BLOB type added for saving photo data)
 def init_db():
     conn = sqlite3.connect('soulmate_online.db')
     cursor = conn.cursor()
@@ -17,7 +18,8 @@ def init_db():
             tongue_blood TEXT, disability TEXT, religion_sect TEXT, caste_clan TEXT,
             education TEXT, occupation_income TEXT, father_details TEXT, mother_details TEXT,
             siblings TEXT, hometown TEXT, address TEXT, contact TEXT,
-            partner_age_height TEXT, partner_edu_city TEXT, partner_other TEXT
+            partner_age_height TEXT, partner_edu_city TEXT, partner_other TEXT,
+            photo BLOB
         )
     ''')
     conn.commit()
@@ -25,21 +27,51 @@ def init_db():
 
 init_db()
 
-# 2. PDF Generation Function
-def generate_pdf(data):
+# 2. Modern PDF Generation Function with Photo Alignment
+def generate_pdf(data, photo_bytes):
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=22, leading=26, textColor=colors.HexColor('#7030a0'), alignment=1, spaceAfter=2)
-    subtitle_style = ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=10, textColor=colors.HexColor('#495057'), alignment=1, spaceAfter=12)
-    section_style = ParagraphStyle('Section', fontName='Helvetica-Bold', fontSize=11, leading=14, textColor=colors.HexColor('#7030a0'), spaceBefore=8, spaceAfter=4)
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=22, leading=26, textColor=colors.HexColor('#7030a0'), alignment=0, spaceAfter=2)
+    subtitle_style = ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=10, textColor=colors.HexColor('#495057'), alignment=0, spaceAfter=4)
+    section_style = ParagraphStyle('Section', fontName='Helvetica-Bold', fontSize=11, leading=14, textColor=colors.HexColor('#7030a0'), spaceBefore=10, spaceAfter=4)
     label_style = ParagraphStyle('Label', fontName='Helvetica-Bold', fontSize=9, textColor=colors.HexColor('#343a40'))
     value_style = ParagraphStyle('Value', fontName='Helvetica', fontSize=9, textColor=colors.HexColor('#495057'))
 
-    story.append(Paragraph("SOULMATE SELECT", title_style))
-    story.append(Paragraph("Proprietor: Farheena Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
+    # Header and Photo Layout Construction
+    header_text_block = []
+    header_text_block.append(Paragraph("SOULMATE SELECT", title_style))
+    header_text_block.append(Paragraph("Proprietor: Farheena Amjad | MATRIMONIAL BIODATA FORM", subtitle_style))
+    
+    # Handling Profile Image layout inside PDF
+    photo_element = "__________________" # Default empty line if photo not available
+    if photo_bytes:
+        try:
+            img_io = io.BytesIO(photo_bytes)
+            # Maintaining aspect ratio using PIL
+            pil_img = PILImage.open(img_io)
+            pil_img.thumbnail((90, 110))
+            img_w, img_h = pil_img.size
+            
+            img_data = io.BytesIO()
+            pil_img.save(img_data, format='JPEG')
+            img_data.seek(0)
+            
+            photo_element = Image(img_data, width=img_w, height=img_h)
+        except:
+            pass
+
+    # Header Grid (Left text, Right photo)
+    header_table_data = [[header_text_block, photo_element]]
+    header_table = Table(header_table_data, colWidths=[400, 120])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('ALIGN', (1,0), (1,0), 'RIGHT'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    ]))
+    story.append(header_table)
 
     def add_pdf_section(title, pairs):
         story.append(Paragraph(title, section_style))
@@ -82,14 +114,19 @@ def generate_pdf(data):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# 3. Streamlit Web GUI Layout
+# 3. Streamlit Modern Web Layout
 st.set_page_config(page_title="Soulmate Select Database", page_icon="💍", layout="centered")
 
 st.markdown("<h1 style='text-align: center; color: #7030a0;'>SOULMATE SELECT</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #495057; font-weight: bold;'>Proprietor: Farheena Amjad | Database System</p>", unsafe_allow_html=True)
-
-# YAHAN ERROR THA - FIXED: hr() ko divider() mein badal diya
 st.divider()
+
+st.subheader("📸 Candidate Profile Photo")
+# NEW FILE UPLOADER FOR IMAGE
+uploaded_photo = st.file_uploader("Upload Profile Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
+
+if uploaded_photo:
+    st.image(uploaded_photo, caption="Uploaded Photo Preview", width=120)
 
 st.subheader("1. Personal Details")
 name = st.text_input("Full Name")
@@ -126,6 +163,11 @@ if st.button("Save & Process Data", type="primary"):
     if not name:
         st.error("Bhai, Full Name likhna zaroori hai!")
     else:
+        # Read image data to binary format
+        photo_data = None
+        if uploaded_photo is not None:
+            photo_data = uploaded_photo.read()
+
         form_data = {
             'name': name, 'gender_dob': gender_dob, 'age_height_weight': age_height_weight,
             'complexion_marital': complexion_marital, 'tongue_blood': tongue_blood, 'disability': disability,
@@ -135,20 +177,23 @@ if st.button("Save & Process Data", type="primary"):
             'partner_age_height': partner_age_height, 'partner_edu_city': partner_edu_city, 'partner_other': partner_other
         }
         
+        # Insert statement including photo BLOB
         conn = sqlite3.connect('soulmate_online.db')
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO profiles (
                 name, gender_dob, age_height_weight, complexion_marital, tongue_blood, disability,
                 religion_sect, caste_clan, education, occupation_income, father_details, mother_details,
-                siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', list(form_data.values()))
+                siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other, photo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', list(form_data.values()) + [photo_data])
         conn.commit()
         conn.close()
         
-        st.success("Record Online Database mein mahfuse ho gaya hai!")
-        pdf_file = generate_pdf(form_data)
+        st.success("Record Photo ke sath Online Database mein save ho gaya hai!")
+        
+        # PDF creation with image data pass-through
+        pdf_file = generate_pdf(form_data, photo_data)
         
         st.download_button(
             label="📥 Download Professional Biodata PDF",
