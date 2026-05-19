@@ -139,35 +139,56 @@ def _safe(row, key: str, default: str = "") -> str:
     try:
         val = row[key]
         return val if val is not None else default
-    except IndexError:
+    except (IndexError, KeyError):
         return default
 
 
-# Explicit SELECT list — never use SELECT * so column positions are always known
-_SELECT_COLS = (
-    "id, biodata_id, "
-    + ", ".join(DB_COLS)
-    + ", photo, created_at, status"
-)
+def _get_existing_cols(conn) -> set:
+    """Return column names that actually exist in the profiles table."""
+    return {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+
+
+def _build_select(conn) -> str:
+    """
+    Build SELECT list using only real columns.
+    Missing columns are aliased as NULL so row shape is always consistent
+    and _safe() handles any absent value gracefully.
+    """
+    existing = _get_existing_cols(conn)
+    desired  = ["id", "biodata_id"] + list(DB_COLS) + ["photo", "created_at", "status"]
+    parts    = [c if c in existing else f"NULL AS {c}" for c in desired]
+    return ", ".join(parts)
 
 
 def load_profiles(search: str = ""):
-    q  = f"SELECT {_SELECT_COLS} FROM profiles"
-    p  = ()
-    if search.strip():
-        q += " WHERE name LIKE ? OR contact LIKE ? OR biodata_id LIKE ?"
-        p  = (f"%{search}%", f"%{search}%", f"%{search}%")
-    q += " ORDER BY id DESC"
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        return conn.execute(q, p).fetchall()
+        sel      = _build_select(conn)
+        existing = _get_existing_cols(conn)
+        if search.strip():
+            filters, params = [], []
+            for col in ("name", "contact", "biodata_id"):
+                if col in existing:
+                    filters.append(f"{col} LIKE ?")
+                    params.append(f"%{search}%")
+            where = (f" WHERE {' OR '.join(filters)}" if filters else "")
+            return conn.execute(
+                f"SELECT {sel} FROM profiles{where} ORDER BY id DESC", params
+            ).fetchall()
+        return conn.execute(
+            f"SELECT {sel} FROM profiles ORDER BY id DESC"
+        ).fetchall()
 
 
 def fetch_profile_by_biodata_id(bid: str):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
+        existing = _get_existing_cols(conn)
+        if "biodata_id" not in existing:
+            return None
+        sel = _build_select(conn)
         return conn.execute(
-            f"SELECT {_SELECT_COLS} FROM profiles WHERE biodata_id = ?", (bid,)
+            f"SELECT {sel} FROM profiles WHERE biodata_id = ?", (bid,)
         ).fetchone()
 
 
