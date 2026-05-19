@@ -6,7 +6,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 import io
 
-# 1. Database Setup (Local inside server)
+# 1. Database Setup
 def init_db():
     conn = sqlite3.connect('soulmate_online.db')
     cursor = conn.cursor()
@@ -25,7 +25,7 @@ def init_db():
 
 init_db()
 
-# 2. PDF Generation Function (In-Memory for Online Download)
+# 2. PDF Generation Function
 def generate_pdf(data):
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
@@ -82,14 +82,15 @@ def generate_pdf(data):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# 3. Streamlit Modern Web GUI Layout
+# 3. Streamlit Web GUI Layout
 st.set_page_config(page_title="Soulmate Select Database", page_icon="💍", layout="centered")
 
 st.markdown("<h1 style='text-align: center; color: #7030a0;'>SOULMATE SELECT</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #495057; font-weight: bold;'>Proprietor: Farheena Amjad | Database System</p>", unsafe_allow_html=True)
-st.hr()
 
-# Form inputs layout
+# YAHAN ERROR THA - FIXED: hr() ko divider() mein badal diya
+st.divider()
+
 st.subheader("1. Personal Details")
 name = st.text_input("Full Name")
 gender_dob = st.text_input("Gender / Date of Birth")
@@ -125,7 +126,6 @@ if st.button("Save & Process Data", type="primary"):
     if not name:
         st.error("Bhai, Full Name likhna zaroori hai!")
     else:
-        # Collect form data
         form_data = {
             'name': name, 'gender_dob': gender_dob, 'age_height_weight': age_height_weight,
             'complexion_marital': complexion_marital, 'tongue_blood': tongue_blood, 'disability': disability,
@@ -135,7 +135,6 @@ if st.button("Save & Process Data", type="primary"):
             'partner_age_height': partner_age_height, 'partner_edu_city': partner_edu_city, 'partner_other': partner_other
         }
         
-        # Save to database
         conn = sqlite3.connect('soulmate_online.db')
         cursor = conn.cursor()
         cursor.execute('''
@@ -149,11 +148,8 @@ if st.button("Save & Process Data", type="primary"):
         conn.close()
         
         st.success("Record Online Database mein mahfuse ho gaya hai!")
-        
-        # Generate PDF data
         pdf_file = generate_pdf(form_data)
         
-        # Show Download Button
         st.download_button(
             label="📥 Download Professional Biodata PDF",
             data=pdf_file,
