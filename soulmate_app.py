@@ -1,14 +1,14 @@
-import tkinter as tk
-from tkinter import messagebox, ttk
+import streamlit as st
 import sqlite3
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+import io
 
-# 1. Database Setup
+# 1. Database Setup (Local inside server)
 def init_db():
-    conn = sqlite3.connect('soulmate_records.db')
+    conn = sqlite3.connect('soulmate_online.db')
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS profiles (
@@ -23,28 +23,12 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 2. Save Data & Generate Modern PDF
-def save_and_export():
-    data = {k: entry_vars[k].get() for k in entry_vars}
-    if not data['name']:
-        messagebox.showerror("Error", "Bhai, Full Name likhna zaroori hai!")
-        return
+init_db()
 
-    conn = sqlite3.connect('soulmate_records.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO profiles (
-            name, gender_dob, age_height_weight, complexion_marital, tongue_blood, disability,
-            religion_sect, caste_clan, education, occupation_income, father_details, mother_details,
-            siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', list(data.values()))
-    conn.commit()
-    conn.close()
-
-    # Professional 1-Page PDF Layout
-    pdf_filename = f"Biodata_{data['name'].replace(' ', '_')}.pdf"
-    doc = SimpleDocTemplate(pdf_filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+# 2. PDF Generation Function (In-Memory for Online Download)
+def generate_pdf(data):
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
 
     styles = getSampleStyleSheet()
@@ -95,58 +79,84 @@ def save_and_export():
     ])
 
     doc.build(story)
-    messagebox.showinfo("Success", f"Record Save ho gaya aur PDF ban gayi hai:\n{pdf_filename}")
-    clear_fields()
+    pdf_buffer.seek(0)
+    return pdf_buffer
 
-def clear_fields():
-    for var in entry_vars.values():
-        var.set("")
+# 3. Streamlit Modern Web GUI Layout
+st.set_page_config(page_title="Soulmate Select Database", page_icon="💍", layout="centered")
 
-# 3. GUI Window Setup
-root = tk.Tk()
-root.title("Soulmate Select - Premium Database")
-root.geometry("620x700")
-root.configure(bg="#f8f6fa")
+st.markdown("<h1 style='text-align: center; color: #7030a0;'>SOULMATE SELECT</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #495057; font-weight: bold;'>Proprietor: Farheena Amjad | Database System</p>", unsafe_allow_html=True)
+st.hr()
 
-banner = tk.Label(root, text="SOULMATE SELECT DATABASE SYSTEM", font=("Arial", 14, "bold"), fg="#ffffff", bg="#7030a0", pady=8)
-banner.pack(fill="x")
+# Form inputs layout
+st.subheader("1. Personal Details")
+name = st.text_input("Full Name")
+gender_dob = st.text_input("Gender / Date of Birth")
+age_height_weight = st.text_input("Age / Height / Weight")
+complexion_marital = st.text_input("Complexion / Marital Status")
+tongue_blood = st.text_input("Mother Tongue / Blood Group")
+disability = st.text_input("Physical Disability")
 
-canvas = tk.Canvas(root, bg="#f8f6fa", highlightthickness=0)
-scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
-scroll_frame = tk.Frame(canvas, bg="#f8f6fa")
+st.subheader("2. Religious & Family Background")
+religion_sect = st.text_input("Religion / Sect (Maslak)")
+caste_clan = st.text_input("Caste / Clan (Zaat)")
 
-scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-canvas.configure(yscrollcommand=scrollbar.set)
-canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-scrollbar.pack(side="right", fill="y")
+st.subheader("3. Education & Career")
+education = st.text_input("Highest Qualification / Field")
+occupation_income = st.text_input("Current Occupation / Income")
 
-fields = [
-    ('name', 'Full Name'), ('gender_dob', 'Gender / Date of Birth'), 
-    ('age_height_weight', 'Age / Height / Weight'), ('complexion_marital', 'Complexion / Marital Status'),
-    ('tongue_blood', 'Mother Tongue / Blood Group'), ('disability', 'Physical Disability'),
-    ('religion_sect', 'Religion / Sect (Maslak)'), ('caste_clan', 'Caste / Clan (Zaat)'),
-    ('education', 'Highest Qualification / Field'), ('occupation_income', 'Current Occupation / Income'),
-    ('father_details', "Father's Name & Occupation"), ('mother_details', "Mother's Name & Occupation"),
-    ('siblings', 'Total Brothers / Sisters'), ('hometown', 'Native Place (Hometown)'),
-    ('address', 'Current City & Address'), ('contact', 'Contact Numbers'),
-    ('partner_age_height', 'Required Age & Height'), ('partner_edu_city', 'Required Qualification & City'),
-    ('partner_other', 'Other Partner Requirements')
-]
-entry_vars = {k: tk.StringVar() for k, _ in fields}
+st.subheader("4. Family Details")
+father_details = st.text_input("Father's Name & Occupation")
+mother_details = st.text_input("Mother's Name & Occupation")
+siblings = st.text_input("Total Brothers / Sisters")
+hometown = st.text_input("Native Place (Hometown)")
 
-for k, label_text in fields:
-    row = tk.Frame(scroll_frame, bg="#f8f6fa", pady=4)
-    row.pack(fill="x", padx=10)
-    lbl = tk.Label(row, text=label_text, font=("Arial", 10, "bold"), anchor="w", width=25, bg="#f8f6fa", fg="#333333")
-    lbl.pack(side="left")
-    ent = tk.Entry(row, textvariable=entry_vars[k], font=("Arial", 10), bd=1, relief="solid")
-    ent.pack(side="right", fill="x", expand=True, ipady=2)
+st.subheader("5. Contact & Location")
+address = st.text_input("Current City & Address")
+contact = st.text_input("Contact Numbers")
 
-btn_frame = tk.Frame(root, bg="#f8f6fa", pady=10)
-btn_frame.pack(fill="x")
-submit_btn = tk.Button(btn_frame, text="Save Record & Export PDF", font=("Arial", 11, "bold"), fg="#ffffff", bg="#7030a0", command=save_and_export, padding=5, relief="flat")
-submit_btn.pack()
+st.subheader("6. Partner Expectations")
+partner_age_height = st.text_input("Required Age & Height")
+partner_edu_city = st.text_input("Required Qualification & City")
+partner_other = st.text_input("Other Partner Requirements")
 
-init_db()
-root.mainloop()
+if st.button("Save & Process Data", type="primary"):
+    if not name:
+        st.error("Bhai, Full Name likhna zaroori hai!")
+    else:
+        # Collect form data
+        form_data = {
+            'name': name, 'gender_dob': gender_dob, 'age_height_weight': age_height_weight,
+            'complexion_marital': complexion_marital, 'tongue_blood': tongue_blood, 'disability': disability,
+            'religion_sect': religion_sect, 'caste_clan': caste_clan, 'education': education,
+            'occupation_income': occupation_income, 'father_details': father_details, 'mother_details': mother_details,
+            'siblings': siblings, 'hometown': hometown, 'address': address, 'contact': contact,
+            'partner_age_height': partner_age_height, 'partner_edu_city': partner_edu_city, 'partner_other': partner_other
+        }
+        
+        # Save to database
+        conn = sqlite3.connect('soulmate_online.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO profiles (
+                name, gender_dob, age_height_weight, complexion_marital, tongue_blood, disability,
+                religion_sect, caste_clan, education, occupation_income, father_details, mother_details,
+                siblings, hometown, address, contact, partner_age_height, partner_edu_city, partner_other
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', list(form_data.values()))
+        conn.commit()
+        conn.close()
+        
+        st.success("Record Online Database mein mahfuse ho gaya hai!")
+        
+        # Generate PDF data
+        pdf_file = generate_pdf(form_data)
+        
+        # Show Download Button
+        st.download_button(
+            label="📥 Download Professional Biodata PDF",
+            data=pdf_file,
+            file_name=f"Biodata_{name.replace(' ', '_')}.pdf",
+            mime="application/pdf"
+        )
