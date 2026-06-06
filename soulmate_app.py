@@ -103,7 +103,7 @@ def init_db():
             )
 
 
-def get_next_biodata_id() -> str:
+def conn.execute(...)() -> str:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
             "SELECT seq FROM sqlite_sequence WHERE name='profiles'"
