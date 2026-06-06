@@ -696,3 +696,24 @@ with tab_tracker:
               </div>
             </div>
             """, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  FOOTER
+# ─────────────────────────────────────────────────────────────
+st.markdown(f"""
+<div style="
+    margin-top: 48px;
+    padding: 20px 0 10px;
+    text-align: center;
+    border-top: 1px solid rgba(107,63,160,0.2);
+">
+    <span style="
+        font-family: 'Cormorant Garamond', serif;
+        font-size: 13px;
+        font-weight: 600;
+        color: {MUTED};
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+    ">NABA TECH BY KALEEM ULLAH SHARIF &nbsp;·&nbsp; 2026</span>
+</div>
+""", unsafe_allow_html=True)
