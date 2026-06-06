@@ -103,12 +103,17 @@ def init_db():
             )
 
 
-def conn.execute(...)() -> str:
+# ✅ FIXED: Correct function name and safe sqlite_sequence handling
+def get_next_biodata_id() -> str:
     with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT seq FROM sqlite_sequence WHERE name='profiles'"
-        ).fetchone()
-        next_rowid = (row[0] + 1) if row else 1
+        try:
+            row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='profiles'"
+            ).fetchone()
+            next_rowid = (row[0] + 1) if row else 1
+        except sqlite3.OperationalError:
+            # sqlite_sequence doesn't exist yet on a fresh/empty database
+            next_rowid = 1
     return _make_biodata_id(next_rowid)
 
 
@@ -251,24 +256,20 @@ def generate_pdf(data: dict, photo_bytes: bytes | None, biodata_id: str = "") ->
     story = [ht, HRFlowable(width="100%", thickness=1.5, color=colors.HexColor(BRAND), spaceAfter=6)]
 
     for sec_title, pairs in SECTIONS.items():
-        # Display both English and Urdu Title in the PDF Section Header
         story.append(Paragraph(sec_title, section_s))
         story.append(HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#d8cce8"), spaceAfter=2))
 
         rows = []
         for key, label_en, label_ur in pairs:
             val = str(data.get(key, "")).strip()
-            # Combines languages cleanly side-by-side into a single cell label
             clean_en = label_en.rstrip(" *")
             clean_ur = label_ur.rstrip(" *")
             combined_label = f"{clean_en} / {clean_ur}"
-            
             rows.append([
                 Paragraph(combined_label + ":", label_s),
                 Paragraph(val or "─────────────────────", value_s),
             ])
 
-        # Increased cell label column size to 210pt to prevent overlay/clipping text
         t = Table(rows, colWidths=[210, 305])
         t.setStyle(TableStyle([
             ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
@@ -301,7 +302,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Standardized string parsing configuration mapping
+# Initialize database on startup
+init_db()
+
 css_style = f"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
@@ -469,7 +472,7 @@ with tab_form:
     field_values = {}
     for section_title, pairs in SECTIONS.items():
         st.markdown(f'<div class="ss-section">{section_title}</div>', unsafe_allow_html=True)
-        
+
         if len(pairs) >= 4:
             left, right = st.columns(2)
             for i, (key, label_en, label_ur) in enumerate(pairs):
